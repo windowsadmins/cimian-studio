@@ -1,0 +1,9 @@
+product:
+  name: CimianAdmin
+  version: ${TIMESTAMP}
+  developer: ExampleOrgU
+  identifier: ca.emilycarru.winadmins.${ARCH}.CimianAdmin
+  description: WinUI 3 administrator dashboard for Cimian-managed devices.
+signing_certificate: ExampleOrgU Intune Windows Enterprise Certificate
+postinstall_action: script
+install_location: 'C:\Program Files\CimianAdmin'
