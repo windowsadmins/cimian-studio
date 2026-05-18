@@ -43,12 +43,15 @@ public partial class App : Application
                 services.AddSingleton<IGitService, GitService>();
                 services.AddSingleton<ISearchService, SearchService>();
                 services.AddSingleton<ISessionState, EditorSessionState>();
+                services.AddSingleton<IBuildSettingsService, BuildSettingsService>();
+                services.AddSingleton<IBuildService, BuildService>();
 
                 services.AddSingleton<MainViewModel>();
                 services.AddTransient<PackagesViewModel>();
                 services.AddTransient<ManifestsViewModel>();
                 services.AddTransient<CatalogsViewModel>();
                 services.AddTransient<Views.Import.ImportViewModel>();
+                services.AddTransient<BuildViewModel>();
 
                 services.AddTransient<MainWindow>();
 
@@ -64,6 +67,9 @@ public partial class App : Application
                 // a brief tab switch.
                 services.AddSingleton<GitPage>();
                 services.AddSingleton<Views.Import.ImportPage>();
+                // BuildPage is a singleton so the watcher state, in-flight build,
+                // and console output survive tab switches.
+                services.AddSingleton<Views.Build.BuildPage>();
                 // SettingsPage is a singleton so card state survives tab switches.
                 services.AddSingleton<Views.Settings.SettingsPage>();
 
@@ -73,6 +79,7 @@ public partial class App : Application
                 // Settings section providers — each feature contributes one.
                 // ISettingsSectionProvider registrations must precede SettingsPage resolution.
                 services.AddSingleton<ISettingsSectionProvider, HooksSectionProvider>();
+                services.AddSingleton<ISettingsSectionProvider, BuildSectionProvider>();
                 services.AddSingleton<ISettingsSectionProvider, AboutSectionProvider>();
             })
             .Build();
