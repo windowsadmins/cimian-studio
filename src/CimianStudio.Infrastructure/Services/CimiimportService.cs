@@ -127,7 +127,7 @@ public sealed class CimiimportService : ICimiimportService
                     {
                         channel.Writer.Complete();
                     }
-                }, cancellationToken);
+                }, CancellationToken.None);
             }
             else if (!channel.Reader.Completion.IsCompleted)
             {
