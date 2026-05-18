@@ -45,6 +45,8 @@ public partial class App : Application
                 services.AddSingleton<ISessionState, EditorSessionState>();
                 services.AddSingleton<IBuildSettingsService, BuildSettingsService>();
                 services.AddSingleton<IBuildService, BuildService>();
+                services.AddSingleton<IImportSettingsService, ImportSettingsService>();
+                services.AddSingleton<ICimiimportService, CimiimportService>();
 
                 services.AddSingleton<MainViewModel>();
                 services.AddTransient<PackagesViewModel>();
@@ -80,6 +82,7 @@ public partial class App : Application
                 // ISettingsSectionProvider registrations must precede SettingsPage resolution.
                 services.AddSingleton<ISettingsSectionProvider, HooksSectionProvider>();
                 services.AddSingleton<ISettingsSectionProvider, BuildSectionProvider>();
+                services.AddSingleton<ISettingsSectionProvider, CimiimportSectionProvider>();
                 services.AddSingleton<ISettingsSectionProvider, AboutSectionProvider>();
             })
             .Build();
