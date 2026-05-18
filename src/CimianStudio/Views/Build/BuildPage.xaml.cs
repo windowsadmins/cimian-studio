@@ -380,11 +380,9 @@ public sealed partial class BuildPage : Page
             TextWrapping = TextWrapping.Wrap,
         });
 
-        panel.Children.Add(BuildOptionCheckBox(
-            "Build .nupkg (Chocolatey-compatible)",
-            "--nupkg — builds a NuGet package instead of an MSI.",
-            options.BuildNupkg,
-            v => options.BuildNupkg = v));
+        // Output format — .msi (default) or .nupkg. Maps to BuildOptions.BuildNupkg.
+        panel.Children.Add(BuildOutputFormatGroup(options));
+
         panel.Children.Add(BuildOptionCheckBox(
             "Also build .intunewin",
             "--intunewin — additionally wraps the artefact for Intune deployment.",
@@ -421,6 +419,168 @@ public sealed partial class BuildPage : Page
             pickFile: false));
 
         return new Flyout { Content = panel };
+    }
+
+    // ----- New project (cimipkg --create) -----------------------------------
+
+    private async void OnNewProjectClicked(object sender, RoutedEventArgs e)
+    {
+        if (_buildSettings.ProjectsFolder is not { } projectsFolder || string.IsNullOrWhiteSpace(projectsFolder))
+        {
+            await ShowDialogAsync("New project", "Configure a projects folder in Settings → Build first.").ConfigureAwait(true);
+            return;
+        }
+
+        var name = await PromptForTextAsync(
+            title: "New cimipkg project",
+            label: "Project folder name (created under " + projectsFolder + "):",
+            initial: "MyApp").ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var safeName = name.Trim();
+        // cimipkg --create writes a directory at the supplied path. Refuse the
+        // call if that path already exists; cimipkg would error out and we'd
+        // surface the failure as a useless console line.
+        var target = Path.Combine(projectsFolder, safeName);
+        if (Directory.Exists(target))
+        {
+            await ShowDialogAsync("New project", $"A folder named '{safeName}' already exists in the projects folder.").ConfigureAwait(true);
+            return;
+        }
+
+        ConsoleBorder.Visibility = Visibility.Visible;
+        var sb = new StringBuilder("$ cimipkg --create ").AppendLine(target);
+        ConsoleText.Text = sb.ToString();
+
+        string? newProjectPath = null;
+        await foreach (var evt in _buildService.CreateProjectAsync(projectsFolder, safeName).ConfigureAwait(true))
+        {
+            switch (evt)
+            {
+                case BuildLine line:
+                    sb.AppendLine(line.Text);
+                    ConsoleText.Text = sb.ToString();
+                    ConsoleScrollViewer.ChangeView(null, double.MaxValue, null, disableAnimation: true);
+                    break;
+                case BuildFinished done when done.ExitCode == 0:
+                    newProjectPath = done.ProductPath ?? target;
+                    ActionStatusText.Text = $"Created '{safeName}'.";
+                    break;
+                case BuildFinished done:
+                    ActionStatusText.Text = $"cimipkg --create exited {done.ExitCode}.";
+                    break;
+                case BuildFailed fail:
+                    ActionStatusText.Text = fail.Reason;
+                    break;
+            }
+        }
+
+        if (newProjectPath is not null)
+        {
+            // FileSystemWatcher will eventually pick this up, but a manual
+            // refresh ensures the new row is selected immediately.
+            await RefreshAllAsync().ConfigureAwait(true);
+            var newProject = ViewModel.AllProjects.FirstOrDefault(p =>
+                string.Equals(p.DirectoryPath, newProjectPath, StringComparison.OrdinalIgnoreCase));
+            if (newProject is not null)
+            {
+                ProjectListView.SelectedItem = newProject;
+            }
+        }
+    }
+
+    // ----- Re-sign existing .pkg (cimipkg --resign) -------------------------
+
+    private async void OnResignClicked(object sender, RoutedEventArgs e)
+    {
+        if (App.MainWindowInstance is not { } window) return;
+
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.Desktop };
+        picker.FileTypeFilter.Add(".pkg");
+        picker.FileTypeFilter.Add(".msi");
+        picker.FileTypeFilter.Add(".nupkg");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(window));
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        // Optional cert override — single dialog with two inputs. Either can
+        // be blank (cimipkg falls back to build-info.yaml / .env values).
+        var certInput = new TextBox { PlaceholderText = "(use build-info / .env)", MinWidth = 320 };
+        var thumbInput = new TextBox { PlaceholderText = "(use build-info / .env)", MinWidth = 320 };
+        var form = new StackPanel { Spacing = 8 };
+        form.Children.Add(new TextBlock { Text = "File: " + file.Path, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], TextWrapping = TextWrapping.Wrap });
+        form.Children.Add(new TextBlock { Text = "Signing certificate subject (--resign-cert)" });
+        form.Children.Add(certInput);
+        form.Children.Add(new TextBlock { Text = "Signing thumbprint (--resign-thumbprint)" });
+        form.Children.Add(thumbInput);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Re-sign package",
+            Content = form,
+            PrimaryButtonText = "Re-sign",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        ConsoleBorder.Visibility = Visibility.Visible;
+        var sb = new StringBuilder("$ cimipkg --resign ").AppendLine(file.Path);
+        ConsoleText.Text = sb.ToString();
+
+        await foreach (var evt in _buildService.ResignPackageAsync(
+            file.Path,
+            string.IsNullOrWhiteSpace(certInput.Text) ? null : certInput.Text.Trim(),
+            string.IsNullOrWhiteSpace(thumbInput.Text) ? null : thumbInput.Text.Trim()).ConfigureAwait(true))
+        {
+            switch (evt)
+            {
+                case BuildLine line:
+                    sb.AppendLine(line.Text);
+                    ConsoleText.Text = sb.ToString();
+                    ConsoleScrollViewer.ChangeView(null, double.MaxValue, null, disableAnimation: true);
+                    break;
+                case BuildFinished done when done.ExitCode == 0:
+                    ActionStatusText.Text = $"Re-signed {Path.GetFileName(file.Path)}.";
+                    break;
+                case BuildFinished done:
+                    ActionStatusText.Text = $"cimipkg --resign exited {done.ExitCode}.";
+                    break;
+                case BuildFailed fail:
+                    ActionStatusText.Text = fail.Reason;
+                    break;
+            }
+        }
+    }
+
+    private static StackPanel BuildOutputFormatGroup(BuildOptions options)
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Output format",
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+        });
+
+        // RadioButtons gives a single-select group out of the box. Items use
+        // ComboBoxItem-style strings; we read SelectedIndex to map back to the
+        // BuildNupkg flag (0 = .msi default, 1 = .nupkg).
+        var group = new RadioButtons();
+        group.Items.Add(".msi (default)");
+        group.Items.Add(".nupkg (Chocolatey-compatible)");
+        group.SelectedIndex = options.BuildNupkg ? 1 : 0;
+        group.SelectionChanged += (_, _) => options.BuildNupkg = group.SelectedIndex == 1;
+        panel.Children.Add(group);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Maps to --nupkg. .msi is the default; .nupkg builds a NuGet/Chocolatey-compatible package.",
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        return panel;
     }
 
     private static StackPanel BuildOptionCheckBox(string label, string description, bool initial, Action<bool> setter)

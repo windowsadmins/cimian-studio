@@ -26,11 +26,26 @@
                            Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
             </StackPanel>
 
-            <TextBox Grid.Row="1"
-                     x:Name="FilterBox"
-                     PlaceholderText="Filter projects…"
-                     Margin="0,0,0,8"
-                     TextChanged="OnFilterChanged" />
+            <Grid Grid.Row="1" Margin="0,0,0,8" ColumnSpacing="6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBox Grid.Column="0"
+                         x:Name="FilterBox"
+                         PlaceholderText="Filter projects…"
+                         TextChanged="OnFilterChanged" />
+                <Button Grid.Column="1"
+                        x:Name="NewProjectButton"
+                        Click="OnNewProjectClicked"
+                        ToolTipService.ToolTip="Scaffold a new cimipkg project (cimipkg --create)"
+                        Padding="8,4">
+                    <Viewbox Width="14" Height="14">
+                        <Path Width="24" Height="24" Style="{StaticResource LucidePath}"
+                              Data="M12,5 V19 M5,12 H19" />
+                    </Viewbox>
+                </Button>
+            </Grid>
 
             <ListView Grid.Row="2"
                       x:Name="ProjectListView"
@@ -77,6 +92,7 @@
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Spacing="2">
                     <TextBlock x:Name="ProjectNameText"
@@ -90,21 +106,26 @@
                                TextTrimming="CharacterEllipsis" />
                 </StackPanel>
                 <Button Grid.Column="1"
+                        x:Name="ResignButton"
+                        Content="Re-sign .pkg…"
+                        Click="OnResignClicked"
+                        ToolTipService.ToolTip="Re-sign an existing .pkg without rebuilding (cimipkg --resign)" />
+                <Button Grid.Column="2"
                         x:Name="RevealProductButton"
                         Content="Reveal Built Package"
                         Visibility="Collapsed"
                         Click="OnRevealProductClicked" />
-                <Button Grid.Column="2"
+                <Button Grid.Column="3"
                         x:Name="ImportProductButton"
                         Content="Import into Repo"
                         Visibility="Collapsed"
                         Click="OnImportProductClicked" />
-                <Button Grid.Column="3"
+                <Button Grid.Column="4"
                         x:Name="OptionsButton"
                         Content="Options"
                         Click="OnOptionsClicked"
                         IsEnabled="False" />
-                <Button Grid.Column="4"
+                <Button Grid.Column="5"
                         x:Name="BuildButton"
                         Content="Build Package"
                         Style="{StaticResource AccentButtonStyle}"
