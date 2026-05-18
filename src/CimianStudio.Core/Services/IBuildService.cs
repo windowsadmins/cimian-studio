@@ -36,6 +36,6 @@ public interface IBuildService
     /// </summary>
     IAsyncEnumerable<BuildEvent> StreamBuildAsync(BuildProject project, BuildOptions options, CancellationToken cancellationToken = default);
 
-    /// <summary>Locates the cimipkg.exe to use (settings override → sibling release → PATH → standard install).</summary>
+    /// <summary>Locates the cimipkg.exe to use (settings override → standard install → PATH).</summary>
     Task<CimipkgToolInfo> GetToolInfoAsync(CancellationToken cancellationToken = default);
 }

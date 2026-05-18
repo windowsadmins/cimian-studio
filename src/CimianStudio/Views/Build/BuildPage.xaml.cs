@@ -74,7 +74,6 @@ public sealed partial class BuildPage : Page
 
         ProjectListView.ItemsSource = ViewModel.FilteredProjects;
 
-        _buildSettings.ProjectsFolderChanged += OnProjectsFolderChanged;
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
     }
@@ -83,11 +82,14 @@ public sealed partial class BuildPage : Page
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
+        _buildSettings.ProjectsFolderChanged -= OnProjectsFolderChanged;
+        _buildSettings.ProjectsFolderChanged += OnProjectsFolderChanged;
         await RefreshAllAsync().ConfigureAwait(true);
     }
 
     private async void OnUnloaded(object sender, RoutedEventArgs e)
     {
+        _buildSettings.ProjectsFolderChanged -= OnProjectsFolderChanged;
         await FlushAutoSaveAsync().ConfigureAwait(true);
         DisposeWatchers();
     }
@@ -1149,6 +1151,7 @@ public sealed partial class BuildPage : Page
         DispatcherQueue?.TryEnqueue(() =>
         {
             _watcherDebounceTimer!.Stop();
+            _watcherDebounceTimer.Tick -= OnWatcherTickRefresh;
             _watcherDebounceTimer.Tick += OnWatcherTickRefresh;
             _watcherDebounceTimer.Start();
         });
@@ -1187,6 +1190,7 @@ public sealed partial class BuildPage : Page
         DispatcherQueue?.TryEnqueue(() =>
         {
             _watcherDebounceTimer!.Stop();
+            _watcherDebounceTimer.Tick -= OnWatcherTickRepopulatePayload;
             _watcherDebounceTimer.Tick += OnWatcherTickRepopulatePayload;
             _watcherDebounceTimer.Start();
         });

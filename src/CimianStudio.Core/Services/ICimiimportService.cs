@@ -26,8 +26,8 @@ public interface ICimiimportService
 
     /// <summary>
     /// Locates the cimiimport.exe to use. Lookup order: settings override →
-    /// <c>%PATH%</c> (via <c>where.exe</c>-style resolution) →
-    /// <c>C:\Program Files\Cimian\cimiimport.exe</c>.
+    /// <c>C:\Program Files\Cimian\cimiimport.exe</c> →
+    /// <c>%PATH%</c> (via <c>where.exe</c>-style resolution).
     /// </summary>
     Task<CimiimportToolInfo> GetToolInfoAsync(CancellationToken cancellationToken = default);
 }

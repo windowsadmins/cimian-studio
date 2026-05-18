@@ -211,7 +211,7 @@ public sealed class BuildService : IBuildService
                     {
                         channel.Writer.Complete();
                     }
-                }, cancellationToken);
+                }, CancellationToken.None);
             }
             else if (!channel.Reader.Completion.IsCompleted)
             {
