@@ -51,7 +51,7 @@ public sealed partial class BuildPage : Page
 
     // Maps each script slot file-name to its in-line editor; we read the
     // TextBox.Text back on save and let the service handle deletion when empty.
-    private readonly Dictionary<string, TextBox> _scriptEditors = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, CimianStudio.Views.ScriptEditor> _scriptEditors = new(StringComparer.OrdinalIgnoreCase);
 
     public BuildPage(BuildViewModel viewModel, IBuildService buildService, IBuildSettingsService buildSettings)
     {
@@ -102,25 +102,47 @@ public sealed partial class BuildPage : Page
 
     private async Task RefreshAllAsync()
     {
+        ProjectCountText.Text = "Loading…";
         // HasProjectsFolderAsync warms the settings cache on first call so the
         // ProjectsFolder accessor returns the persisted value rather than null.
-        _ = await _buildSettings.HasProjectsFolderAsync().ConfigureAwait(true);
+        bool hasFolder;
+        try
+        {
+            hasFolder = await _buildSettings.HasProjectsFolderAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ProjectCountText.Text = string.Create(CultureInfo.InvariantCulture, $"Settings load failed: {ex.Message}");
+            return;
+        }
         var folder = _buildSettings.ProjectsFolder;
-        if (string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
+        if (!hasFolder || string.IsNullOrWhiteSpace(folder) || !Directory.Exists(folder))
         {
             NoProjectsFolderPanel.Visibility = Visibility.Visible;
             BuildInfoBorder.Visibility = Visibility.Collapsed;
             PayloadScriptsGrid.Visibility = Visibility.Collapsed;
-            ProjectCountText.Text = string.Empty;
+            ProjectCountText.Text = string.Create(CultureInfo.InvariantCulture, $"No projects folder (got: {folder ?? "<null>"})");
             ViewModel.FilteredProjects.Clear();
             DisposeProjectsFolderWatcher();
             return;
         }
 
         NoProjectsFolderPanel.Visibility = Visibility.Collapsed;
-        await ViewModel.RefreshProjectsAsync().ConfigureAwait(true);
-        ProjectCountText.Text = string.Create(CultureInfo.InvariantCulture,
-            $"{ViewModel.AllProjects.Count} project{(ViewModel.AllProjects.Count == 1 ? string.Empty : "s")}");
+        ProjectCountText.Text = string.Create(CultureInfo.InvariantCulture, $"Scanning {folder}…");
+        try
+        {
+            await ViewModel.RefreshProjectsAsync().ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ProjectCountText.Text = string.Create(CultureInfo.InvariantCulture, $"Discovery failed: {ex.GetType().Name}: {ex.Message}");
+            SetupProjectsFolderWatcher(folder);
+            return;
+        }
+        var count = ViewModel.AllProjects.Count;
+        ProjectCountText.Text = count == 0
+            ? string.Create(CultureInfo.InvariantCulture, $"No build-info.yaml files found in {folder}")
+            : string.Create(CultureInfo.InvariantCulture, $"{count} project{(count == 1 ? string.Empty : "s")}");
         SetupProjectsFolderWatcher(folder);
     }
 
@@ -382,11 +404,9 @@ public sealed partial class BuildPage : Page
             TextWrapping = TextWrapping.Wrap,
         });
 
-        panel.Children.Add(BuildOptionCheckBox(
-            "Build .nupkg (Chocolatey-compatible)",
-            "--nupkg — builds a NuGet package instead of an MSI.",
-            options.BuildNupkg,
-            v => options.BuildNupkg = v));
+        // Output format — .msi (default) or .nupkg. Maps to BuildOptions.BuildNupkg.
+        panel.Children.Add(BuildOutputFormatGroup(options));
+
         panel.Children.Add(BuildOptionCheckBox(
             "Also build .intunewin",
             "--intunewin — additionally wraps the artefact for Intune deployment.",
@@ -423,6 +443,168 @@ public sealed partial class BuildPage : Page
             pickFile: false));
 
         return new Flyout { Content = panel };
+    }
+
+    // ----- New project (cimipkg --create) -----------------------------------
+
+    private async void OnNewProjectClicked(object sender, RoutedEventArgs e)
+    {
+        if (_buildSettings.ProjectsFolder is not { } projectsFolder || string.IsNullOrWhiteSpace(projectsFolder))
+        {
+            await ShowDialogAsync("New project", "Configure a projects folder in Settings → Build first.").ConfigureAwait(true);
+            return;
+        }
+
+        var name = await PromptForTextAsync(
+            title: "New cimipkg project",
+            label: "Project folder name (created under " + projectsFolder + "):",
+            initial: "MyApp").ConfigureAwait(true);
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        var safeName = name.Trim();
+        // cimipkg --create writes a directory at the supplied path. Refuse the
+        // call if that path already exists; cimipkg would error out and we'd
+        // surface the failure as a useless console line.
+        var target = Path.Combine(projectsFolder, safeName);
+        if (Directory.Exists(target))
+        {
+            await ShowDialogAsync("New project", $"A folder named '{safeName}' already exists in the projects folder.").ConfigureAwait(true);
+            return;
+        }
+
+        ConsoleBorder.Visibility = Visibility.Visible;
+        var sb = new StringBuilder("$ cimipkg --create ").AppendLine(target);
+        ConsoleText.Text = sb.ToString();
+
+        string? newProjectPath = null;
+        await foreach (var evt in _buildService.CreateProjectAsync(projectsFolder, safeName).ConfigureAwait(true))
+        {
+            switch (evt)
+            {
+                case BuildLine line:
+                    sb.AppendLine(line.Text);
+                    ConsoleText.Text = sb.ToString();
+                    ConsoleScrollViewer.ChangeView(null, double.MaxValue, null, disableAnimation: true);
+                    break;
+                case BuildFinished done when done.ExitCode == 0:
+                    newProjectPath = done.ProductPath ?? target;
+                    ActionStatusText.Text = $"Created '{safeName}'.";
+                    break;
+                case BuildFinished done:
+                    ActionStatusText.Text = $"cimipkg --create exited {done.ExitCode}.";
+                    break;
+                case BuildFailed fail:
+                    ActionStatusText.Text = fail.Reason;
+                    break;
+            }
+        }
+
+        if (newProjectPath is not null)
+        {
+            // FileSystemWatcher will eventually pick this up, but a manual
+            // refresh ensures the new row is selected immediately.
+            await RefreshAllAsync().ConfigureAwait(true);
+            var newProject = ViewModel.AllProjects.FirstOrDefault(p =>
+                string.Equals(p.DirectoryPath, newProjectPath, StringComparison.OrdinalIgnoreCase));
+            if (newProject is not null)
+            {
+                ProjectListView.SelectedItem = newProject;
+            }
+        }
+    }
+
+    // ----- Re-sign existing .pkg (cimipkg --resign) -------------------------
+
+    private async void OnResignClicked(object sender, RoutedEventArgs e)
+    {
+        if (App.MainWindowInstance is not { } window) return;
+
+        var picker = new FileOpenPicker { SuggestedStartLocation = PickerLocationId.Desktop };
+        picker.FileTypeFilter.Add(".pkg");
+        picker.FileTypeFilter.Add(".msi");
+        picker.FileTypeFilter.Add(".nupkg");
+        InitializeWithWindow.Initialize(picker, WindowNative.GetWindowHandle(window));
+        var file = await picker.PickSingleFileAsync();
+        if (file is null) return;
+
+        // Optional cert override — single dialog with two inputs. Either can
+        // be blank (cimipkg falls back to build-info.yaml / .env values).
+        var certInput = new TextBox { PlaceholderText = "(use build-info / .env)", MinWidth = 320 };
+        var thumbInput = new TextBox { PlaceholderText = "(use build-info / .env)", MinWidth = 320 };
+        var form = new StackPanel { Spacing = 8 };
+        form.Children.Add(new TextBlock { Text = "File: " + file.Path, Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"], TextWrapping = TextWrapping.Wrap });
+        form.Children.Add(new TextBlock { Text = "Signing certificate subject (--resign-cert)" });
+        form.Children.Add(certInput);
+        form.Children.Add(new TextBlock { Text = "Signing thumbprint (--resign-thumbprint)" });
+        form.Children.Add(thumbInput);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Re-sign package",
+            Content = form,
+            PrimaryButtonText = "Re-sign",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        ConsoleBorder.Visibility = Visibility.Visible;
+        var sb = new StringBuilder("$ cimipkg --resign ").AppendLine(file.Path);
+        ConsoleText.Text = sb.ToString();
+
+        await foreach (var evt in _buildService.ResignPackageAsync(
+            file.Path,
+            string.IsNullOrWhiteSpace(certInput.Text) ? null : certInput.Text.Trim(),
+            string.IsNullOrWhiteSpace(thumbInput.Text) ? null : thumbInput.Text.Trim()).ConfigureAwait(true))
+        {
+            switch (evt)
+            {
+                case BuildLine line:
+                    sb.AppendLine(line.Text);
+                    ConsoleText.Text = sb.ToString();
+                    ConsoleScrollViewer.ChangeView(null, double.MaxValue, null, disableAnimation: true);
+                    break;
+                case BuildFinished done when done.ExitCode == 0:
+                    ActionStatusText.Text = $"Re-signed {Path.GetFileName(file.Path)}.";
+                    break;
+                case BuildFinished done:
+                    ActionStatusText.Text = $"cimipkg --resign exited {done.ExitCode}.";
+                    break;
+                case BuildFailed fail:
+                    ActionStatusText.Text = fail.Reason;
+                    break;
+            }
+        }
+    }
+
+    private static StackPanel BuildOutputFormatGroup(BuildOptions options)
+    {
+        var panel = new StackPanel { Spacing = 2 };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Output format",
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+        });
+
+        // RadioButtons gives a single-select group out of the box. Items use
+        // ComboBoxItem-style strings; we read SelectedIndex to map back to the
+        // BuildNupkg flag (0 = .msi default, 1 = .nupkg).
+        var group = new RadioButtons();
+        group.Items.Add(".msi (default)");
+        group.Items.Add(".nupkg (Chocolatey-compatible)");
+        group.SelectedIndex = options.BuildNupkg ? 1 : 0;
+        group.SelectionChanged += (_, _) => options.BuildNupkg = group.SelectedIndex == 1;
+        panel.Children.Add(group);
+
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Maps to --nupkg. .msi is the default; .nupkg builds a NuGet/Chocolatey-compatible package.",
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+            TextWrapping = TextWrapping.Wrap,
+        });
+        return panel;
     }
 
     private static StackPanel BuildOptionCheckBox(string label, string description, bool initial, Action<bool> setter)
@@ -491,7 +673,9 @@ public sealed partial class BuildPage : Page
         ColPackage.Children.Clear();
         ColOptions.Children.Clear();
         ColSigning.Children.Clear();
-        ColMsi.Children.Clear();
+        ColAdvancedPackage.Children.Clear();
+        ColAdvancedInstall.Children.Clear();
+        ColAdvancedMsi.Children.Clear();
         _buildInfoControls.Clear();
 
         if (ViewModel.CurrentBuildInfo is not { } info) return;
@@ -499,42 +683,58 @@ public sealed partial class BuildPage : Page
         _suppressFieldEvents = true;
         try
         {
+            // Three essentials columns — the fields a typical cimipkg project
+            // sets. Anything more exotic goes in the Advanced expander below so
+            // the form doesn't drown new users in MSI-only knobs they'll never
+            // touch (matches the spirit of MunkiStudio's minimal Build form).
+            //
+            // Layout:
+            //   Col 1: Package metadata
+            //   Col 2: Install behaviour, then Code signing stacked below
+            //   Col 3: MSI knobs (upgrade_code / override / msi_properties)
             ColPackage.Children.Add(SectionHeader("Package"));
             AddText(ColPackage, "name", info.Product.Name, v => info.Product.Name = v);
             AddText(ColPackage, "version", info.Product.Version, v => info.Product.Version = v);
             AddText(ColPackage, "identifier", info.Product.Identifier, v => info.Product.Identifier = v);
             AddText(ColPackage, "developer", info.Product.Developer ?? string.Empty, v => info.Product.Developer = NullIfEmpty(v));
             AddMultiline(ColPackage, "description", info.Product.Description ?? string.Empty, v => info.Product.Description = NullIfEmpty(v));
-            AddText(ColPackage, "installer_type", info.Product.InstallerType ?? string.Empty, v => info.Product.InstallerType = NullIfEmpty(v));
-            AddText(ColPackage, "url", info.Product.Url ?? string.Empty, v => info.Product.Url = NullIfEmpty(v));
-            AddText(ColPackage, "copyright", info.Product.Copyright ?? string.Empty, v => info.Product.Copyright = NullIfEmpty(v));
-            AddText(ColPackage, "license", info.Product.License ?? string.Empty, v => info.Product.License = NullIfEmpty(v));
-            AddText(ColPackage, "category", info.Category ?? string.Empty, v => info.Category = NullIfEmpty(v));
-            AddText(ColPackage, "icon", info.Icon ?? string.Empty, v => info.Icon = NullIfEmpty(v));
 
-            ColOptions.Children.Add(SectionHeader("Install / Options"));
+            ColOptions.Children.Add(SectionHeader("Install"));
             AddText(ColOptions, "install_location", info.InstallLocation ?? string.Empty, v => info.InstallLocation = NullIfEmpty(v));
-            AddText(ColOptions, "install_arguments", info.InstallArguments ?? string.Empty, v => info.InstallArguments = NullIfEmpty(v));
-            AddText(ColOptions, "valid_exit_codes", info.ValidExitCodes ?? string.Empty, v => info.ValidExitCodes = NullIfEmpty(v));
-            AddText(ColOptions, "uninstall_arguments", info.UninstallArguments ?? string.Empty, v => info.UninstallArguments = NullIfEmpty(v));
-            AddText(ColOptions, "software_detection", info.SoftwareDetection ?? string.Empty, v => info.SoftwareDetection = NullIfEmpty(v));
             AddText(ColOptions, "postinstall_action", info.PostinstallAction ?? string.Empty, v => info.PostinstallAction = NullIfEmpty(v));
-            AddText(ColOptions, "minimum_os_version", info.MinimumOsVersion ?? string.Empty, v => info.MinimumOsVersion = NullIfEmpty(v));
-            AddMultiline(ColOptions, "blocking_applications", string.Join('\n', info.BlockingApplications ?? []), v =>
+
+            ColOptions.Children.Add(SectionHeader("Code signing"));
+            AddText(ColOptions, "signing_certificate", info.SigningCertificate ?? string.Empty, v => info.SigningCertificate = NullIfEmpty(v));
+            AddText(ColOptions, "signing_thumbprint", info.SigningThumbprint ?? string.Empty, v => info.SigningThumbprint = NullIfEmpty(v));
+
+            ColSigning.Children.Add(SectionHeader("MSI"));
+            AddText(ColSigning, "upgrade_code", info.UpgradeCode ?? string.Empty, v => info.UpgradeCode = NullIfEmpty(v));
+            AddCheck(ColSigning, "override_uninstall_script", info.OverrideUninstallScript, v => info.OverrideUninstallScript = v);
+            AddMultiline(ColSigning, "msi_properties (key=value per line)",
+                FormatKeyValues(info.MsiProperties),
+                v => info.MsiProperties = ParseKeyValues(v));
+
+            // ----- Advanced expander -----
+            ColAdvancedPackage.Children.Add(SectionHeader("Metadata"));
+            AddText(ColAdvancedPackage, "installer_type", info.Product.InstallerType ?? string.Empty, v => info.Product.InstallerType = NullIfEmpty(v));
+            AddText(ColAdvancedPackage, "url", info.Product.Url ?? string.Empty, v => info.Product.Url = NullIfEmpty(v));
+            AddText(ColAdvancedPackage, "copyright", info.Product.Copyright ?? string.Empty, v => info.Product.Copyright = NullIfEmpty(v));
+            AddText(ColAdvancedPackage, "license", info.Product.License ?? string.Empty, v => info.Product.License = NullIfEmpty(v));
+            AddText(ColAdvancedPackage, "category", info.Category ?? string.Empty, v => info.Category = NullIfEmpty(v));
+            AddText(ColAdvancedPackage, "icon", info.Icon ?? string.Empty, v => info.Icon = NullIfEmpty(v));
+
+            ColAdvancedInstall.Children.Add(SectionHeader("Behaviour"));
+            AddText(ColAdvancedInstall, "valid_exit_codes", info.ValidExitCodes ?? string.Empty, v => info.ValidExitCodes = NullIfEmpty(v));
+            AddText(ColAdvancedInstall, "software_detection", info.SoftwareDetection ?? string.Empty, v => info.SoftwareDetection = NullIfEmpty(v));
+            AddText(ColAdvancedInstall, "minimum_os_version", info.MinimumOsVersion ?? string.Empty, v => info.MinimumOsVersion = NullIfEmpty(v));
+            AddMultiline(ColAdvancedInstall, "blocking_applications", string.Join('\n', info.BlockingApplications ?? []), v =>
                 info.BlockingApplications = string.IsNullOrWhiteSpace(v)
                     ? null
                     : [.. v.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)]);
 
-            ColSigning.Children.Add(SectionHeader("Code signing"));
-            AddText(ColSigning, "signing_certificate", info.SigningCertificate ?? string.Empty, v => info.SigningCertificate = NullIfEmpty(v));
-            AddText(ColSigning, "signing_thumbprint", info.SigningThumbprint ?? string.Empty, v => info.SigningThumbprint = NullIfEmpty(v));
-
-            ColMsi.Children.Add(SectionHeader("MSI"));
-            AddText(ColMsi, "upgrade_code", info.UpgradeCode ?? string.Empty, v => info.UpgradeCode = NullIfEmpty(v));
-            AddCheck(ColMsi, "override_uninstall_script", info.OverrideUninstallScript, v => info.OverrideUninstallScript = v);
-            AddMultiline(ColMsi, "msi_properties (key=value per line)",
-                FormatKeyValues(info.MsiProperties),
-                v => info.MsiProperties = ParseKeyValues(v));
+            ColAdvancedMsi.Children.Add(SectionHeader("Arguments"));
+            AddText(ColAdvancedMsi, "install_arguments", info.InstallArguments ?? string.Empty, v => info.InstallArguments = NullIfEmpty(v));
+            AddText(ColAdvancedMsi, "uninstall_arguments", info.UninstallArguments ?? string.Empty, v => info.UninstallArguments = NullIfEmpty(v));
         }
         finally
         {
@@ -637,20 +837,33 @@ public sealed partial class BuildPage : Page
 
     // ----- Payload tree -----------------------------------------------------
 
+    private readonly System.Collections.ObjectModel.ObservableCollection<PayloadTreeNode> _payloadRoots = [];
+
     private void PopulatePayloadTree()
     {
-        PayloadTree.RootNodes.Clear();
+        _payloadRoots.Clear();
+        PayloadTree.ItemsSource ??= _payloadRoots;
+        PayloadExpandToggle.Visibility = Visibility.Collapsed;
         if (ViewModel.SelectedProject is not { } project) return;
         var payload = project.PayloadPath;
         if (!Directory.Exists(payload)) return;
 
+        var hasNestedFolders = false;
         foreach (var node in BuildNodesForDirectory(payload))
         {
-            PayloadTree.RootNodes.Add(node);
+            _payloadRoots.Add(node);
+            if (node.IsDirectory) hasNestedFolders = true;
         }
+        // The toggle is only useful when there's something to expand/collapse —
+        // a flat list of files at the root doesn't benefit from it, and showing
+        // it stranded below an empty tree looked broken.
+        PayloadExpandToggle.Visibility = hasNestedFolders ? Visibility.Visible : Visibility.Collapsed;
+        // DataTemplate uses IsExpanded=True, so the fresh tree is fully open
+        // — the actionable label is "Collapse".
+        UpdateExpandToggleAppearance(allExpanded: true);
     }
 
-    private static IEnumerable<TreeViewNode> BuildNodesForDirectory(string directory)
+    private static IEnumerable<PayloadTreeNode> BuildNodesForDirectory(string directory)
     {
         // Top-level folders first, then files — matches the order File Explorer uses.
         foreach (var dir in Directory.EnumerateDirectories(directory).OrderBy(d => d, StringComparer.OrdinalIgnoreCase))
@@ -659,17 +872,13 @@ public sealed partial class BuildPage : Page
         }
         foreach (var file in Directory.EnumerateFiles(directory).OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
         {
-            yield return BuildFileNode(file);
+            yield return new PayloadTreeNode(file, Path.GetFileName(file), isDirectory: false);
         }
     }
 
-    private static TreeViewNode BuildDirectoryNode(string directory)
+    private static PayloadTreeNode BuildDirectoryNode(string directory)
     {
-        var node = new TreeViewNode
-        {
-            Content = new PayloadTreeNode(directory, Path.GetFileName(directory), IsDirectory: true),
-            IsExpanded = true,
-        };
+        var node = new PayloadTreeNode(directory, Path.GetFileName(directory), isDirectory: true);
         foreach (var child in BuildNodesForDirectory(directory))
         {
             node.Children.Add(child);
@@ -677,23 +886,16 @@ public sealed partial class BuildPage : Page
         return node;
     }
 
-    private static TreeViewNode BuildFileNode(string file)
-        => new()
-        {
-            Content = new PayloadTreeNode(file, Path.GetFileName(file), IsDirectory: false),
-        };
+    private PayloadTreeNode? SelectedPayload() => PayloadTree.SelectedItem as PayloadTreeNode;
 
-    private static PayloadTreeNode? GetNodePayload(TreeViewNode? node) => node?.Content as PayloadTreeNode;
-
-    private string? SelectedPayloadPath()
-        => GetNodePayload(PayloadTree.SelectedNode)?.FullPath;
+    private string? SelectedPayloadPath() => SelectedPayload()?.FullPath;
 
     private string PayloadTargetDir()
     {
         // Default insertion point: the selected folder, or the selected file's
         // parent, or the project payload root if nothing is selected.
         if (ViewModel.SelectedProject is not { } project) return string.Empty;
-        var selected = GetNodePayload(PayloadTree.SelectedNode);
+        var selected = SelectedPayload();
         if (selected is null) return project.PayloadPath;
         return selected.IsDirectory ? selected.FullPath : Path.GetDirectoryName(selected.FullPath) ?? project.PayloadPath;
     }
@@ -715,10 +917,34 @@ public sealed partial class BuildPage : Page
 
     private void OnPayloadExpandToggleClicked(object sender, RoutedEventArgs e)
     {
-        // Toggle: if any root is collapsed, expand all; otherwise collapse all.
+        // ItemsSource-mode TreeView still uses TreeViewNode internally — we walk
+        // RootNodes to flip IsExpanded on every node. Toggle: if any node is
+        // collapsed, expand all; otherwise collapse all.
         var anyCollapsed = false;
         WalkNodes(PayloadTree.RootNodes, n => { if (!n.IsExpanded) anyCollapsed = true; });
         WalkNodes(PayloadTree.RootNodes, n => n.IsExpanded = anyCollapsed);
+        // After the toggle, the new state is the opposite of what we just had.
+        UpdateExpandToggleAppearance(allExpanded: anyCollapsed);
+    }
+
+    /// <summary>
+    /// Flips the Expand toggle button's label and glyph so it always offers the
+    /// action that's actionable — "Collapse" when everything is open, "Expand"
+    /// when there's something to open. E73F = BackToWindow (collapse), E740 =
+    /// FullScreen (expand).
+    /// </summary>
+    private void UpdateExpandToggleAppearance(bool allExpanded)
+    {
+        if (allExpanded)
+        {
+            PayloadExpandLabel.Text = "Collapse";
+            PayloadExpandIcon.Glyph = "";
+        }
+        else
+        {
+            PayloadExpandLabel.Text = "Expand";
+            PayloadExpandIcon.Glyph = "";
+        }
     }
 
     private static void WalkNodes(IList<TreeViewNode> nodes, Action<TreeViewNode> visit)
@@ -772,10 +998,11 @@ public sealed partial class BuildPage : Page
 
     private async void OnPayloadDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
-        var node = GetNodePayload(PayloadTree.SelectedNode);
+        var node = SelectedPayload();
         if (node is null) return;
         if (node.IsDirectory)
         {
+            // Toggle expansion via the TreeViewNode that maps to the selected item.
             if (PayloadTree.SelectedNode is { } tvn) tvn.IsExpanded = !tvn.IsExpanded;
             return;
         }
@@ -793,16 +1020,17 @@ public sealed partial class BuildPage : Page
     {
         // WinUI 3 TreeView doesn't fire SelectionChanged on right-click, so we
         // do it manually here by walking up to the TreeViewItem and selecting
-        // its node before showing the flyout.
+        // its bound PayloadTreeNode before showing the flyout.
         var element = e.OriginalSource as DependencyObject;
         while (element is not null and not TreeViewItem)
         {
             element = VisualTreeHelper.GetParent(element);
         }
-        if (element is TreeViewItem item && PayloadTree.NodeFromContainer(item) is { } node)
+        if (element is TreeViewItem item
+            && PayloadTree.ItemFromContainer(item) is PayloadTreeNode payload)
         {
-            PayloadTree.SelectedNode = node;
-            var flyout = BuildPayloadNodeFlyout(node);
+            PayloadTree.SelectedItem = payload;
+            var flyout = BuildPayloadNodeFlyout(payload);
             flyout.ShowAt(item, new Microsoft.UI.Xaml.Controls.Primitives.FlyoutShowOptions
             {
                 Position = e.GetPosition(item),
@@ -811,9 +1039,8 @@ public sealed partial class BuildPage : Page
         }
     }
 
-    private MenuFlyout BuildPayloadNodeFlyout(TreeViewNode node)
+    private MenuFlyout BuildPayloadNodeFlyout(PayloadTreeNode payload)
     {
-        var payload = GetNodePayload(node);
         var flyout = new MenuFlyout();
         if (payload?.IsDirectory == true)
         {
@@ -962,27 +1189,55 @@ public sealed partial class BuildPage : Page
         try { content = await File.ReadAllTextAsync(path).ConfigureAwait(true); }
         catch (IOException ex) { await ShowDialogAsync("Open failed", ex.Message).ConfigureAwait(true); return; }
 
+        // Route PowerShell scripts (the overwhelmingly common case in cimipkg
+        // payloads — wrapper .ps1s, login-every helpers, etc) through the rich
+        // ScriptFullEditorDialog so they get syntax highlighting + the live
+        // PwshLinter panel rather than a single-line TextBox that swallowed
+        // CRLFs and showed only the first line.
+        var ext = Path.GetExtension(path);
+        if (string.Equals(ext, ".ps1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(ext, ".psm1", StringComparison.OrdinalIgnoreCase))
+        {
+            var dialog = new CimianStudio.Views.ScriptFullEditorDialog
+            {
+                Label = Path.GetFileName(path),
+                ScriptText = content,
+                XamlRoot = XamlRoot,
+            };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                try { await File.WriteAllTextAsync(path, dialog.ScriptText).ConfigureAwait(true); }
+                catch (IOException ex) { await ShowDialogAsync("Save failed", ex.Message).ConfigureAwait(true); }
+            }
+            return;
+        }
+
+        // Other text files (.yaml, .json, .txt, …) get a plain TextBox with a
+        // properly sized container so the whole file is visible — the previous
+        // implementation reserved 480px via the inner TextBox only, which the
+        // ContentDialog then collapsed back to one visible line.
         var box = new TextBox
         {
             Text = content,
             AcceptsReturn = true,
             TextWrapping = TextWrapping.NoWrap,
             FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"),
-            MinHeight = 480,
-            MinWidth = 720,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            VerticalAlignment = VerticalAlignment.Stretch,
+            FontSize = 12,
         };
-        var dialog = new ContentDialog
+        ScrollViewer.SetVerticalScrollBarVisibility(box, ScrollBarVisibility.Auto);
+        ScrollViewer.SetHorizontalScrollBarVisibility(box, ScrollBarVisibility.Auto);
+        var grid = new Grid { Width = 900, Height = 600 };
+        grid.Children.Add(box);
+        var plainDialog = new ContentDialog
         {
             Title = Path.GetFileName(path),
-            Content = new ScrollViewer { Content = box, MinWidth = 720, MinHeight = 480 },
+            Content = grid,
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = XamlRoot,
         };
-        if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+        if (await plainDialog.ShowAsync() == ContentDialogResult.Primary)
         {
             try { await File.WriteAllTextAsync(path, box.Text).ConfigureAwait(true); }
             catch (IOException ex) { await ShowDialogAsync("Save failed", ex.Message).ConfigureAwait(true); }
@@ -1024,27 +1279,15 @@ public sealed partial class BuildPage : Page
     {
         var panel = new StackPanel { Spacing = 4 };
 
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        header.Children.Add(new TextBlock
+        // Use the shared ScriptEditor UserControl — it already handles PowerShell
+        // syntax highlighting, line numbers, and the Expand button (which opens
+        // ScriptFullEditorDialog with the live PwshLinter active). We just hand
+        // it the slot name as its label and wire ScriptChanged → auto-save.
+        var editor = new ScriptEditor
         {
-            Text = slotName,
-            Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
-        });
-        var expand = new Button { Content = "Expand" };
-        Grid.SetColumn(expand, 1);
-        header.Children.Add(expand);
-        panel.Children.Add(header);
-
-        var box = new TextBox
-        {
-            AcceptsReturn = true,
-            TextWrapping = TextWrapping.NoWrap,
-            FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"),
-            FontSize = 12,
-            MinHeight = 140,
-            MaxHeight = 220,
+            Label = slotName,
+            MinHeight = 200,
+            MaxHeight = 280,
         };
 
         // Async load on the dispatcher — preserves the order of slots in the
@@ -1055,44 +1298,19 @@ public sealed partial class BuildPage : Page
             DispatcherQueue.TryEnqueue(() =>
             {
                 _suppressFieldEvents = true;
-                try { box.Text = content; }
+                try { editor.ScriptText = content; }
                 finally { _suppressFieldEvents = false; }
             });
         });
 
-        box.TextChanged += (_, _) =>
+        editor.ScriptChanged += (_, _) =>
         {
             if (_suppressFieldEvents) return;
             QueueAutoSave();
         };
-        expand.Click += async (_, _) =>
-        {
-            var enlarged = new TextBox
-            {
-                Text = box.Text,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.NoWrap,
-                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Cascadia Mono, Consolas"),
-                MinHeight = 480,
-                MinWidth = 720,
-            };
-            var dialog = new ContentDialog
-            {
-                Title = slotName,
-                Content = new ScrollViewer { Content = enlarged, MinWidth = 720, MinHeight = 480 },
-                PrimaryButtonText = "Apply",
-                CloseButtonText = "Cancel",
-                DefaultButton = ContentDialogButton.Primary,
-                XamlRoot = XamlRoot,
-            };
-            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
-            {
-                box.Text = enlarged.Text;
-            }
-        };
 
-        panel.Children.Add(box);
-        _scriptEditors[slotName] = box;
+        panel.Children.Add(editor);
+        _scriptEditors[slotName] = editor;
         return panel;
     }
 
@@ -1114,7 +1332,7 @@ public sealed partial class BuildPage : Page
             await ViewModel.SaveCurrentBuildInfoAsync().ConfigureAwait(true);
             foreach (var (name, editor) in _scriptEditors)
             {
-                await _buildService.WriteScriptAsync(project, name, editor.Text).ConfigureAwait(true);
+                await _buildService.WriteScriptAsync(project, name, editor.ScriptText).ConfigureAwait(true);
             }
         }
         catch (IOException ex)

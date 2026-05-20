@@ -38,4 +38,17 @@ public interface IBuildService
 
     /// <summary>Locates the cimipkg.exe to use (settings override → standard install → PATH).</summary>
     Task<CimipkgToolInfo> GetToolInfoAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs <c>cimipkg --create &lt;path&gt;</c> to scaffold a new project under
+    /// <paramref name="projectsFolder"/> with the supplied folder name. Streams
+    /// cimipkg's output for the dialog's status line.
+    /// </summary>
+    IAsyncEnumerable<BuildEvent> CreateProjectAsync(string projectsFolder, string projectName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs <c>cimipkg --resign &lt;package&gt;</c> with optional cert overrides.
+    /// Re-signs an existing <c>.pkg</c> in place without recompressing.
+    /// </summary>
+    IAsyncEnumerable<BuildEvent> ResignPackageAsync(string packagePath, string? signCertSubject, string? signThumbprint, CancellationToken cancellationToken = default);
 }

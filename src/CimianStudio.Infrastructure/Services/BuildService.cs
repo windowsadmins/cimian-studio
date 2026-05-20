@@ -232,6 +232,163 @@ public sealed class BuildService : IBuildService
         }
     }
 
+    public IAsyncEnumerable<BuildEvent> CreateProjectAsync(
+        string projectsFolder,
+        string projectName,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectsFolder);
+        ArgumentException.ThrowIfNullOrWhiteSpace(projectName);
+
+        // cimipkg --create needs a non-existent target path; it scaffolds the
+        // directory + build-info.yaml + payload/ + scripts/ itself.
+        var target = Path.Combine(projectsFolder, projectName);
+        return RunCimipkgAsync(
+            args: ["--create", target],
+            workingDir: projectsFolder,
+            productPathOnSuccess: () => Directory.Exists(target) ? target : null,
+            missingToolMessage: "cimipkg.exe not found. Configure its path in Settings → Build.",
+            cancellationToken: cancellationToken);
+    }
+
+    public IAsyncEnumerable<BuildEvent> ResignPackageAsync(
+        string packagePath,
+        string? signCertSubject,
+        string? signThumbprint,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(packagePath);
+
+        var args = new List<string> { "--resign", packagePath };
+        if (!string.IsNullOrWhiteSpace(signCertSubject))
+        {
+            args.Add("--resign-cert");
+            args.Add(signCertSubject);
+        }
+        if (!string.IsNullOrWhiteSpace(signThumbprint))
+        {
+            args.Add("--resign-thumbprint");
+            args.Add(signThumbprint);
+        }
+
+        return RunCimipkgAsync(
+            args: args,
+            // Run from the package's directory so cimipkg can resolve any
+            // relative .env / signing config the same way a fresh build would.
+            workingDir: Path.GetDirectoryName(packagePath) ?? Environment.CurrentDirectory,
+            productPathOnSuccess: () => File.Exists(packagePath) ? packagePath : null,
+            missingToolMessage: "cimipkg.exe not found. Configure its path in Settings → Build.",
+            cancellationToken: cancellationToken);
+    }
+
+    /// <summary>
+    /// Shared spawn / line-stream / exit-handler harness for every cimipkg
+    /// invocation. Pulls the tool path, builds the <see cref="ProcessStartInfo"/>,
+    /// pipes stdout+stderr into a <see cref="Channel{T}"/>, and emits one
+    /// terminal <see cref="BuildFinished"/> or <see cref="BuildFailed"/> event.
+    /// </summary>
+    private async IAsyncEnumerable<BuildEvent> RunCimipkgAsync(
+        IReadOnlyList<string> args,
+        string workingDir,
+        Func<string?> productPathOnSuccess,
+        string missingToolMessage,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var tool = await GetToolInfoAsync(cancellationToken).ConfigureAwait(false);
+        if (!tool.Found || string.IsNullOrEmpty(tool.Path))
+        {
+            yield return new BuildFailed(missingToolMessage);
+            yield break;
+        }
+
+        var channel = Channel.CreateUnbounded<BuildEvent>(new UnboundedChannelOptions
+        {
+            SingleReader = true,
+            SingleWriter = false,
+        });
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = tool.Path,
+            WorkingDirectory = workingDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+
+        Process process = new() { StartInfo = psi };
+        try
+        {
+            process.OutputDataReceived += (_, e) =>
+            {
+                if (e.Data is not null) channel.Writer.TryWrite(new BuildLine(e.Data));
+            };
+            process.ErrorDataReceived += (_, e) =>
+            {
+                if (e.Data is not null) channel.Writer.TryWrite(new BuildLine(e.Data));
+            };
+
+            bool started;
+            try
+            {
+                started = process.Start();
+            }
+            catch (System.ComponentModel.Win32Exception ex)
+            {
+                channel.Writer.TryWrite(new BuildFailed($"Could not launch cimipkg: {ex.Message}"));
+                channel.Writer.Complete();
+                started = false;
+            }
+
+            if (started)
+            {
+                process.BeginOutputReadLine();
+                process.BeginErrorReadLine();
+
+                var p = process;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await p.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+                        channel.Writer.TryWrite(new BuildFinished(p.ExitCode, productPathOnSuccess()));
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        try { if (!p.HasExited) p.Kill(entireProcessTree: true); }
+                        catch (InvalidOperationException) { /* already exited */ }
+                        catch (System.ComponentModel.Win32Exception) { /* race */ }
+                        channel.Writer.TryWrite(new BuildFailed("Cancelled."));
+                    }
+                    catch (Exception ex)
+                    {
+                        channel.Writer.TryWrite(new BuildFailed(ex.Message));
+                    }
+                    finally
+                    {
+                        channel.Writer.Complete();
+                    }
+                }, cancellationToken);
+            }
+            else if (!channel.Reader.Completion.IsCompleted)
+            {
+                channel.Writer.TryWrite(new BuildFailed("cimipkg failed to start."));
+                channel.Writer.Complete();
+            }
+
+            await foreach (var evt in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))
+            {
+                yield return evt;
+            }
+        }
+        finally
+        {
+            process.Dispose();
+        }
+    }
+
     public async Task<CimipkgToolInfo> GetToolInfoAsync(CancellationToken cancellationToken = default)
     {
         // Settings cache must be warm before we read BuildSettings via the
