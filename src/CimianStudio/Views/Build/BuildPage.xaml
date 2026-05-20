@@ -6,14 +6,21 @@
     xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
     xmlns:build="using:CimianStudio.Views.Build">
 
-    <Grid>
+    <!-- Matches the Packages/Catalogs page layout: outer Grid with consistent
+         page padding + ColumnSpacing, each column wrapped in a CardStyle Border
+         with the shared CardShadow + Translation depth, so the Build tab reads
+         the same as the rest of the app. -->
+    <Grid Padding="16,12,16,16" ColumnSpacing="16">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="260" />
+            <ColumnDefinition x:Name="LeftColumn" Width="280" MinWidth="220" MaxWidth="420" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <!-- Left column: fixed-width project list with filter. -->
-        <Grid Grid.Column="0" Padding="12,16,12,12">
+        <Border Grid.Column="0"
+                Style="{StaticResource CardStyle}"
+                Shadow="{StaticResource CardShadow}"
+                Translation="0,0,16">
+        <Grid Padding="16,16,16,16">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
@@ -79,9 +86,17 @@
                 </ListView.ContextFlyout>
             </ListView>
         </Grid>
+        </Border>
 
-        <!-- Right: project detail. Action bar pinned; everything below scrolls. -->
-        <Grid Grid.Column="1" Padding="20,16,20,16" RowSpacing="12">
+        <!-- Right: project detail wrapped in its own card for shadow/depth
+             matching the Packages/Catalogs pattern. Action bar pinned; the
+             scrollable area holds the per-section Build Info / Payload / Scripts
+             surfaces. -->
+        <Border Grid.Column="1"
+                Style="{StaticResource CardStyle}"
+                Shadow="{StaticResource CardShadow}"
+                Translation="0,0,16">
+        <Grid Padding="16,16,16,16" RowSpacing="12">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -349,5 +364,6 @@
                 </StackPanel>
             </ScrollViewer>
         </Grid>
+        </Border>
     </Grid>
 </Page>
