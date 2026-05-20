@@ -177,13 +177,36 @@ public sealed class GitHooksService : IGitHooksService
 
         if (active)
         {
-            if (File.Exists(disabledPath) && !File.Exists(activePath))
-                File.Move(disabledPath, activePath);
+            if (File.Exists(activePath))
+            {
+                // Already active — idempotent no-op.
+                return Task.CompletedTask;
+            }
+            if (!File.Exists(disabledPath))
+            {
+                // Neither variant exists; toggling silently would have lied to the UI
+                // ("Activated foo." while nothing changed). Surface it instead so the
+                // caller can show a real error and revert the switch.
+                throw new FileNotFoundException(
+                    $"Hook script not found — neither '{Path.GetFileName(activePath)}' nor '{Path.GetFileName(disabledPath)}' exist in {Path.GetDirectoryName(activePath)}.",
+                    activePath);
+            }
+            File.Move(disabledPath, activePath);
         }
         else
         {
-            if (File.Exists(activePath))
-                File.Move(activePath, disabledPath, overwrite: false);
+            if (File.Exists(disabledPath) && !File.Exists(activePath))
+            {
+                // Already disabled — idempotent no-op.
+                return Task.CompletedTask;
+            }
+            if (!File.Exists(activePath))
+            {
+                throw new FileNotFoundException(
+                    $"Hook script not found — '{Path.GetFileName(activePath)}' does not exist in {Path.GetDirectoryName(activePath)}.",
+                    activePath);
+            }
+            File.Move(activePath, disabledPath, overwrite: false);
         }
 
         return Task.CompletedTask;
@@ -209,6 +232,11 @@ public sealed class GitHooksService : IGitHooksService
 
             using var proc = Process.Start(psi);
             if (proc is null) return null;
+            // Drain stderr asynchronously so a chatty git build (warnings about deprecated
+            // config keys, etc) doesn't fill the pipe and deadlock us against
+            // StandardOutput.ReadToEnd().
+            proc.ErrorDataReceived += static (_, _) => { };
+            proc.BeginErrorReadLine();
             var output = proc.StandardOutput.ReadToEnd().Trim();
             proc.WaitForExit();
             return proc.ExitCode == 0 && !string.IsNullOrEmpty(output) ? output : null;
@@ -239,6 +267,9 @@ public sealed class GitHooksService : IGitHooksService
 
             using var proc = Process.Start(psi);
             if (proc is null) return Path.Combine(gitRoot, ".git", "hooks");
+            // Same stderr-drain pattern as ReadCoreHooksPathViaGit — see note there.
+            proc.ErrorDataReceived += static (_, _) => { };
+            proc.BeginErrorReadLine();
             var output = proc.StandardOutput.ReadToEnd().Trim();
             proc.WaitForExit();
             if (proc.ExitCode == 0 && !string.IsNullOrEmpty(output))

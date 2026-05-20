@@ -45,13 +45,13 @@ public sealed class GitService : IGitService
     {
         ArgumentNullException.ThrowIfNull(info);
         ArgumentException.ThrowIfNullOrWhiteSpace(subject);
-        return Task.Run(() => CommitCore(info, subject, body, runHooks, amend, progress), cancellationToken);
+        return Task.Run(() => CommitCore(info, subject, body, runHooks, amend, progress, cancellationToken), cancellationToken);
     }
 
     public Task<GitPushResult> PushAsync(GitRepositoryInfo info, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);
-        return Task.Run(() => PushCore(info, progress), cancellationToken);
+        return Task.Run(() => PushCore(info, progress, cancellationToken), cancellationToken);
     }
 
     public Task<GitIdentity> GetIdentityAsync(GitRepositoryInfo info, CancellationToken cancellationToken = default)
@@ -103,7 +103,7 @@ public sealed class GitService : IGitService
         {
             // ls-remote is the lightest-weight network probe that still exercises auth
             // and TLS — no commits or refs are written.
-            var (exit, output) = RunGitStreaming(info.GitRoot, ["ls-remote", "--heads", "origin"], progress);
+            var (exit, output) = RunGitStreaming(info.GitRoot, ["ls-remote", "--heads", "origin"], progress, cancellationToken);
             return new GitAuthResult(exit == 0, output);
         }, cancellationToken);
     }
@@ -153,7 +153,7 @@ public sealed class GitService : IGitService
         ArgumentNullException.ThrowIfNull(info);
         return Task.Run(() =>
         {
-            var (code, output) = RunGitStreaming(info.GitRoot, ["fetch", "--all", "--prune", "--progress"], progress);
+            var (code, output) = RunGitStreaming(info.GitRoot, ["fetch", "--all", "--prune", "--progress"], progress, cancellationToken);
             return new GitFetchResult(code == 0, output);
         }, cancellationToken);
     }
@@ -165,7 +165,7 @@ public sealed class GitService : IGitService
         {
             // --rebase + --autostash is the user's preferred default: keeps history
             // linear and survives a dirty working tree without manual stash gymnastics.
-            var (code, output) = RunGitStreaming(info.GitRoot, ["pull", "--rebase", "--autostash", "--progress"], progress);
+            var (code, output) = RunGitStreaming(info.GitRoot, ["pull", "--rebase", "--autostash", "--progress"], progress, cancellationToken);
             return new GitPullResult(code == 0, output);
         }, cancellationToken);
     }
@@ -501,7 +501,7 @@ public sealed class GitService : IGitService
         Commands.Stage(repo, relativePaths);
     }
 
-    private static GitCommitResult CommitCore(GitRepositoryInfo info, string subject, string? body, bool runHooks, bool amend, IProgress<string>? progress)
+    private static GitCommitResult CommitCore(GitRepositoryInfo info, string subject, string? body, bool runHooks, bool amend, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         var args = new List<string> { "commit" };
         if (!runHooks) args.Add("--no-verify");
@@ -514,7 +514,7 @@ public sealed class GitService : IGitService
             args.Add(body);
         }
 
-        var (exit, output) = RunGitStreaming(info.GitRoot, args, progress);
+        var (exit, output) = RunGitStreaming(info.GitRoot, args, progress, cancellationToken);
         if (exit != 0)
         {
             return new GitCommitResult(false, null, output);
@@ -533,12 +533,12 @@ public sealed class GitService : IGitService
         return new GitCommitResult(true, sha, output);
     }
 
-    private static GitPushResult PushCore(GitRepositoryInfo info, IProgress<string>? progress)
+    private static GitPushResult PushCore(GitRepositoryInfo info, IProgress<string>? progress, CancellationToken cancellationToken)
     {
         // GIT_PROGRESS_NO_FORCE_UPDATE is the closest thing to a "give me steady
         // updates" knob on Windows git; combined with progress=true this gives us
         // periodic counter lines.
-        var (exit, output) = RunGitStreaming(info.GitRoot, ["push", "--progress"], progress);
+        var (exit, output) = RunGitStreaming(info.GitRoot, ["push", "--progress"], progress, cancellationToken);
         return new GitPushResult(exit == 0, output);
     }
 
@@ -874,7 +874,7 @@ public sealed class GitService : IGitService
     }
 
     private static (int ExitCode, string Output) RunGit(string workingDir, IEnumerable<string> args) =>
-        RunGitStreaming(workingDir, args, progress: null);
+        RunGitStreaming(workingDir, args, progress: null, cancellationToken: default);
 
     /// <summary>
     /// Runs <c>git</c> with arguments, streaming each stdout/stderr line to
@@ -882,10 +882,18 @@ public sealed class GitService : IGitService
     /// output string. Used for long operations (commit with hooks, push) where the
     /// UI needs live feedback.
     /// </summary>
+    /// <remarks>
+    /// stdout / stderr DataReceived callbacks fire on different threadpool
+    /// threads, so writes to <c>combined</c> are guarded by a lock to prevent
+    /// interleaved chars under load. A registered cancellation hook kills the
+    /// process so callers can abort long ops (fetch / pull / push / commit-with-hooks)
+    /// — plain <c>WaitForExit()</c> is uninterruptible.
+    /// </remarks>
     private static (int ExitCode, string Output) RunGitStreaming(
         string workingDir,
         IEnumerable<string> args,
-        IProgress<string>? progress)
+        IProgress<string>? progress,
+        CancellationToken cancellationToken)
     {
         var psi = new ProcessStartInfo
         {
@@ -899,17 +907,18 @@ public sealed class GitService : IGitService
         foreach (var arg in args) psi.ArgumentList.Add(arg);
 
         var combined = new StringBuilder();
+        var combinedLock = new object();
         using var proc = new Process { StartInfo = psi };
         proc.OutputDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
-            combined.AppendLine(e.Data);
+            lock (combinedLock) combined.AppendLine(e.Data);
             progress?.Report(e.Data);
         };
         proc.ErrorDataReceived += (_, e) =>
         {
             if (e.Data is null) return;
-            combined.AppendLine(e.Data);
+            lock (combinedLock) combined.AppendLine(e.Data);
             progress?.Report(e.Data);
         };
 
@@ -921,8 +930,16 @@ public sealed class GitService : IGitService
             }
             proc.BeginOutputReadLine();
             proc.BeginErrorReadLine();
+            using var reg = cancellationToken.Register(() =>
+            {
+                try { if (!proc.HasExited) proc.Kill(entireProcessTree: true); }
+                catch { /* race: process exited between check and kill */ }
+            });
             proc.WaitForExit();
-            return (proc.ExitCode, combined.ToString().TrimEnd());
+            cancellationToken.ThrowIfCancellationRequested();
+            string output;
+            lock (combinedLock) output = combined.ToString().TrimEnd();
+            return (proc.ExitCode, output);
         }
         catch (System.ComponentModel.Win32Exception ex)
         {
