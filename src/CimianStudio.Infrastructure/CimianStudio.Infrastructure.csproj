@@ -16,18 +16,13 @@
   <ItemGroup>
     <ProjectReference Include="..\CimianStudio.Core\CimianStudio.Core.csproj" />
     <ProjectReference Include="..\CimianStudio.Shared\CimianStudio.Shared.csproj" />
-    <!-- Cimian.Core hosts YamlUtils — the single source of truth for pkginfo /
-         manifest / catalog YAML across every Cimian tool and CimianStudio. See
-         shared/core/Services/YamlUtils.cs upstream. Same sibling-submodule path
-         convention as CimianStudio.csproj's Cimian.Import reference. -->
-    <ProjectReference Include="..\..\..\..\packages\CimianTools\shared\core\Cimian.Core.csproj"
-                      Private="true" />
-    <!-- Cimian.Import hosts ImportService + IImportPrompter. WinUIImportPrompter
-         (in CimianStudio.Infrastructure.Import) is the GUI-side adapter the
-         interface explicitly anticipates; ImportPage hands collected wizard
-         state through it to ImportService.ImportAsync for the disk write. -->
-    <ProjectReference Include="..\..\..\..\packages\CimianTools\shared\import\Cimian.Import.csproj"
-                      Private="true" />
+    <!-- CimianStudio is a standalone GitHub repo (github.com/windowsadmins/cimianstudio).
+         It deliberately does NOT type-couple to the Cimian source repo — admins
+         are expected to have Cimian installed (cimipkg.exe + cimiimport.exe at
+         C:\Program Files\Cimian\). The Build and Import tabs shell out to those
+         binaries at runtime via Process.Start. YAML round-tripping lives locally
+         in Yaml/CimianYaml.cs, ported from the upstream YamlUtils — the on-disk
+         pkginfo/manifest/catalog format is the contract, not the .cs source. -->
   </ItemGroup>
 
   <ItemGroup>

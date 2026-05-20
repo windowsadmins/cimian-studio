@@ -1,28 +1,22 @@
 namespace CimianStudio.Infrastructure.Yaml;
 
-using Cimian.Core.Services;
 using CimianStudio.Core.Models.Packages;
 
 /// <summary>
-/// Thin wrapper around <see cref="YamlUtils.SerializePkgInfo{T}"/> /
-/// <see cref="YamlUtils.DeserializePkgInfo{T}"/> that handles the trailing
-/// <c>_metadata</c> block. Exists solely because YamlDotNet 16.3 silently drops
-/// any <c>[YamlMember(Alias = "_metadata")]</c> binding (leading-underscore
-/// alias regression), so <see cref="Package.Metadata"/> is <see cref="YamlIgnoreAttribute"/>
-/// and we have to splice the block in/out by hand.
-///
-/// All canonical formatting decisions (key order, quoting, literal blocks,
-/// boolean handling) live upstream in <c>shared/core/Services/YamlUtils.cs</c> —
-/// this file deliberately holds none of them.
+/// Thin wrapper around <see cref="CimianYaml.SerializePkgInfo{T}"/> /
+/// <see cref="CimianYaml.DeserializePkgInfo{T}"/> that handles the trailing
+/// <c>_metadata</c> block. Both <see cref="Package.Metadata"/> assignment and
+/// the script trailing-newline normalisation happen here so the rest of the
+/// app can think in terms of <see cref="Package"/> values, not YAML text.
 /// </summary>
 public static class PackageYaml
 {
     public static Package? Deserialize(string yaml)
     {
         if (string.IsNullOrEmpty(yaml)) return null;
-        var pkg = YamlUtils.DeserializePkgInfo<Package>(yaml);
+        var pkg = CimianYaml.DeserializePkgInfo<Package>(yaml);
         if (pkg is null) return null;
-        pkg.Metadata = YamlUtils.ExtractMetadataBlock(yaml);
+        pkg.Metadata = CimianYaml.ExtractMetadataBlock(yaml);
         return pkg;
     }
 
@@ -30,17 +24,10 @@ public static class PackageYaml
     {
         ArgumentNullException.ThrowIfNull(package);
         EnsureTrailingNewlinesForScripts(package);
-        var yaml = YamlUtils.SerializePkgInfo(package);
-        if (package.Metadata is { Count: > 0 } md)
-        {
-            // YamlUtils' top-level reorder always puts `_metadata` last, so
-            // appending here lands at the canonical position. Wrapping in a
-            // single-key dict gives YamlDotNet a target to render the block
-            // shape (`_metadata:\n  key: value\n  ...`).
-            var metaYaml = YamlUtils.Serializer.Serialize(new Dictionary<string, object?> { ["_metadata"] = md });
-            yaml = yaml.TrimEnd('\n') + "\n" + metaYaml;
-        }
-        return yaml;
+        // CimianYaml.SerializePkgInfo handles _metadata splice + key reorder
+        // when Package.Metadata is non-empty (reflection-based on the
+        // "Metadata" property name).
+        return CimianYaml.SerializePkgInfo(package);
     }
 
     // Without a trailing newline, YamlDotNet picks `|-` (strip) instead of `|`

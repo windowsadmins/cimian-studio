@@ -1,6 +1,6 @@
 namespace CimianStudio.Infrastructure.Tests.Yaml;
 
-using Cimian.Core.Services;
+using CimianStudio.Infrastructure.Yaml;
 using CimianStudio.Core.Models.Packages;
 using FluentAssertions;
 
@@ -12,7 +12,7 @@ public class PackageRoundTripTests
         var path = Path.Combine(TestPaths.SampleRepository, "pkgsinfo", "Mozilla", "Firefox.yaml");
         var text = File.ReadAllText(path);
 
-        var pkg = YamlUtils.DeserializePkgInfo<Package>(text);
+        var pkg = CimianYaml.DeserializePkgInfo<Package>(text);
 
         pkg.Should().NotBeNull();
         pkg!.Name.Should().Be("firefox");
@@ -32,10 +32,10 @@ public class PackageRoundTripTests
     public void Firefox_Sample_RoundTripsWithoutDataLoss()
     {
         var path = Path.Combine(TestPaths.SampleRepository, "pkgsinfo", "Mozilla", "Firefox.yaml");
-        var original = YamlUtils.DeserializePkgInfo<Package>(File.ReadAllText(path))!;
+        var original = CimianYaml.DeserializePkgInfo<Package>(File.ReadAllText(path))!;
 
-        var yaml = YamlUtils.SerializePkgInfo(original);
-        var roundTripped = YamlUtils.DeserializePkgInfo<Package>(yaml)!;
+        var yaml = CimianYaml.SerializePkgInfo(original);
+        var roundTripped = CimianYaml.DeserializePkgInfo<Package>(yaml)!;
 
         roundTripped.Should().BeEquivalentTo(original, options => options
             .Excluding(p => p.FilePath)

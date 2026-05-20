@@ -4,7 +4,7 @@ using System.Collections.Concurrent;
 using CimianStudio.Core.Models.Manifests;
 using CimianStudio.Core.Models.Repository;
 using CimianStudio.Core.Services;
-using Cimian.Core.Services;
+using CimianStudio.Infrastructure.Yaml;
 using CimianStudio.Shared;
 
 /// <summary>
@@ -148,7 +148,7 @@ public sealed class ManifestService : IManifestService
         try
         {
             var text = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
-            var manifest = YamlUtils.DeserializeManifest<Manifest>(text);
+            var manifest = CimianYaml.DeserializeManifest<Manifest>(text);
             if (manifest is null)
             {
                 return null;
@@ -188,7 +188,7 @@ public sealed class ManifestService : IManifestService
             Directory.CreateDirectory(directory);
         }
 
-        var yaml = YamlUtils.SerializeManifest(manifest);
+        var yaml = CimianYaml.SerializeManifest(manifest);
         await File.WriteAllTextAsync(filePath, yaml, cancellationToken).ConfigureAwait(false);
         manifest.FilePath = filePath;
         manifest.LastModified = File.GetLastWriteTimeUtc(filePath);
