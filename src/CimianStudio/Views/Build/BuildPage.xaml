@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Page
+    x:Class="CimianStudio.Views.Build.BuildPage"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:muxc="using:Microsoft.UI.Xaml.Controls">
+
+    <Grid>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="260" />
+            <ColumnDefinition Width="*" />
+        </Grid.ColumnDefinitions>
+
+        <!-- Left column: fixed-width project list with filter. -->
+        <Grid Grid.Column="0" Padding="12,16,12,12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <StackPanel Grid.Row="0" Spacing="2" Margin="0,0,0,8">
+                <TextBlock Text="Build" Style="{StaticResource TitleLargeTextBlockStyle}" />
+                <TextBlock x:Name="ProjectCountText"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+            </StackPanel>
+
+            <TextBox Grid.Row="1"
+                     x:Name="FilterBox"
+                     PlaceholderText="Filter projects…"
+                     Margin="0,0,0,8"
+                     TextChanged="OnFilterChanged" />
+
+            <ListView Grid.Row="2"
+                      x:Name="ProjectListView"
+                      SelectionMode="Single"
+                      SelectionChanged="OnProjectSelectionChanged">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <Setter Property="Padding" Value="8,6,8,6" />
+                        <Setter Property="MinHeight" Value="32" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding Name}"
+                                   TextTrimming="CharacterEllipsis" />
+                    </DataTemplate>
+                </ListView.ItemTemplate>
+                <ListView.ContextFlyout>
+                    <MenuFlyout>
+                        <MenuFlyoutItem Text="Build" Click="OnContextBuildClicked" />
+                        <MenuFlyoutItem Text="Reveal in File Explorer" Click="OnContextRevealClicked" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Rename…" Click="OnContextRenameClicked" />
+                        <MenuFlyoutItem Text="Duplicate" Click="OnContextDuplicateClicked" />
+                        <MenuFlyoutSeparator />
+                        <MenuFlyoutItem Text="Delete…" Click="OnContextDeleteClicked" />
+                    </MenuFlyout>
+                </ListView.ContextFlyout>
+            </ListView>
+        </Grid>
+
+        <!-- Right: project detail. Action bar pinned; everything below scrolls. -->
+        <Grid Grid.Column="1" Padding="20,16,20,16" RowSpacing="12">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+
+            <!-- Action bar -->
+            <Grid Grid.Row="0" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock x:Name="ProjectNameText"
+                               Style="{StaticResource SubtitleTextBlockStyle}"
+                               TextTrimming="CharacterEllipsis"
+                               Text="No project selected" />
+                    <TextBlock x:Name="ActionStatusText"
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Button Grid.Column="1"
+                        x:Name="RevealProductButton"
+                        Content="Reveal Built Package"
+                        Visibility="Collapsed"
+                        Click="OnRevealProductClicked" />
+                <Button Grid.Column="2"
+                        x:Name="ImportProductButton"
+                        Content="Import into Repo"
+                        Visibility="Collapsed"
+                        Click="OnImportProductClicked" />
+                <Button Grid.Column="3"
+                        x:Name="OptionsButton"
+                        Content="Options"
+                        Click="OnOptionsClicked"
+                        IsEnabled="False" />
+                <Button Grid.Column="4"
+                        x:Name="BuildButton"
+                        Content="Build Package"
+                        Style="{StaticResource AccentButtonStyle}"
+                        Click="OnBuildClicked"
+                        IsEnabled="False" />
+            </Grid>
+
+            <!-- Scrolling content -->
+            <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel Spacing="16">
+                    <!-- Empty-state placeholder for the unconfigured-folder case. -->
+                    <Border x:Name="NoProjectsFolderPanel"
+                            Visibility="Collapsed"
+                            Style="{StaticResource CardStyle}"
+                            Padding="20,18,20,18">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="No projects folder configured"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Text="Open Settings → Build and pick the folder that contains your cimipkg projects (one project per subdirectory)."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                            <HyperlinkButton Content="Open Settings" Click="OnOpenSettingsClicked" Padding="0" />
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Build console — hidden until a build has emitted output. -->
+                    <Border x:Name="ConsoleBorder"
+                            Visibility="Collapsed"
+                            Style="{StaticResource CardStyle}"
+                            Padding="12">
+                        <Grid RowSpacing="6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="200" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Build output"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}"
+                                           VerticalAlignment="Center" />
+                                <Button Grid.Column="1"
+                                        Content="Clear"
+                                        Click="OnClearConsoleClicked" />
+                            </Grid>
+                            <Border Grid.Row="1"
+                                    Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="4">
+                                <ScrollViewer x:Name="ConsoleScrollViewer"
+                                              VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Auto">
+                                    <TextBlock x:Name="ConsoleText"
+                                               FontFamily="Cascadia Mono, Consolas"
+                                               FontSize="12"
+                                               TextWrapping="NoWrap"
+                                               Padding="10"
+                                               IsTextSelectionEnabled="True" />
+                                </ScrollViewer>
+                            </Border>
+                        </Grid>
+                    </Border>
+
+                    <!-- Build Info: four-column typed form. -->
+                    <Border x:Name="BuildInfoBorder"
+                            Style="{StaticResource CardStyle}"
+                            Padding="16"
+                            Visibility="Collapsed">
+                        <StackPanel Spacing="10">
+                            <TextBlock Text="Build Info"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <Grid x:Name="BuildInfoGrid" ColumnSpacing="20">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <!-- Each column StackPanel is populated by code-behind so we
+                                     can grow/shrink fields without a XAML mutation. -->
+                                <StackPanel x:Name="ColPackage"  Grid.Column="0" Spacing="8" />
+                                <StackPanel x:Name="ColOptions"  Grid.Column="1" Spacing="8" />
+                                <StackPanel x:Name="ColSigning"  Grid.Column="2" Spacing="8" />
+                                <StackPanel x:Name="ColMsi"      Grid.Column="3" Spacing="8" />
+                            </Grid>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Payload + Scripts (50/50). -->
+                    <Grid x:Name="PayloadScriptsGrid" ColumnSpacing="12" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Payload -->
+                        <Border Grid.Column="0"
+                                Style="{StaticResource CardStyle}"
+                                Padding="16">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Payload"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Button Content="New Folder" Click="OnPayloadNewFolderClicked" />
+                                    <Button Content="Add Files" Click="OnPayloadAddFilesClicked" />
+                                    <Button Content="Delete" Click="OnPayloadDeleteClicked" />
+                                    <Button Content="Reveal" Click="OnPayloadRevealClicked" />
+                                </StackPanel>
+                                <muxc:TreeView x:Name="PayloadTree"
+                                               MinHeight="240"
+                                               MaxHeight="480"
+                                               AllowDrop="True"
+                                               DragOver="OnPayloadDragOver"
+                                               Drop="OnPayloadDrop"
+                                               DoubleTapped="OnPayloadDoubleTapped"
+                                               RightTapped="OnPayloadRightTapped"
+                                               SelectionMode="Single" />
+                                <Button x:Name="PayloadExpandToggle"
+                                        Content="Expand All / Collapse All"
+                                        HorizontalAlignment="Stretch"
+                                        Click="OnPayloadExpandToggleClicked" />
+                            </StackPanel>
+                        </Border>
+
+                        <!-- Scripts -->
+                        <Border Grid.Column="1"
+                                Style="{StaticResource CardStyle}"
+                                Padding="16">
+                            <StackPanel Spacing="8">
+                                <TextBlock Text="Scripts"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <StackPanel x:Name="ScriptsPanel" Spacing="12" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Grid>
+    </Grid>
+</Page>

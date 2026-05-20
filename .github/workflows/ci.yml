@@ -26,29 +26,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # CimianStudio has ProjectReferences to ../../../../packages/CimianTools/shared/
-      # (the sibling-submodule layout we use locally under a parent Cimian folder).
-      # CI checks out cimianstudio in isolation, so clone the public cimian repo
-      # directly into the slot the ProjectReferences expect. Both Cimian.Import and
-      # the YamlUtils consolidation now live on main (cimian PRs #26 and #28).
-      - name: Checkout CimianTools sibling (for shared library ProjectReferences)
-        shell: pwsh
-        run: |
-          # GITHUB_WORKSPACE is D:\a\<repo>\<repo>\ (double-nested), and the
-          # ProjectReference goes four levels up from src/CimianStudio/ which
-          # lands at D:\a\. So we go up two from GITHUB_WORKSPACE to D:\a\,
-          # then create packages/CimianTools/ there.
-          $siblingRoot = (Resolve-Path "$env:GITHUB_WORKSPACE\..\..").Path
-          $target = Join-Path $siblingRoot 'packages\CimianTools'
-          New-Item -ItemType Directory -Path (Split-Path $target) -Force | Out-Null
-          git clone --depth=1 https://github.com/windowsadmins/cimian.git $target
-          foreach ($required in @(
-            "$target\shared\import\Cimian.Import.csproj",
-            "$target\shared\core\Services\YamlUtils.cs")) {
-            if (-not (Test-Path $required)) {
-              throw "Required upstream file not found: $required"
-            }
-          }
+      # CimianStudio is self-contained — no sibling-checkout step needed.
+      # The Build / Import tabs shell out to cimipkg.exe / cimiimport.exe at
+      # runtime (admins install Cimian separately), and YAML round-tripping
+      # lives locally in CimianStudio.Infrastructure/Yaml/CimianYaml.cs.
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

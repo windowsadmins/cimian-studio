@@ -5,7 +5,7 @@ using CimianStudio.Core.Models.Catalogs;
 using CimianStudio.Core.Models.Packages;
 using CimianStudio.Core.Models.Repository;
 using CimianStudio.Core.Services;
-using Cimian.Core.Services;
+using CimianStudio.Infrastructure.Yaml;
 using CimianStudio.Shared;
 
 /// <summary>
@@ -180,12 +180,12 @@ public sealed class CatalogService : ICatalogService
             List<Package> packages;
             try
             {
-                var wrapper = YamlUtils.DeserializeCatalog<CatalogFile>(text);
+                var wrapper = CimianYaml.DeserializeCatalog<CatalogFile>(text);
                 packages = wrapper?.Items ?? [];
             }
             catch (YamlDotNet.Core.YamlException)
             {
-                packages = YamlUtils.DeserializeCatalog<List<Package>>(text) ?? [];
+                packages = CimianYaml.DeserializeCatalog<List<Package>>(text) ?? [];
             }
 
             return new Catalog
