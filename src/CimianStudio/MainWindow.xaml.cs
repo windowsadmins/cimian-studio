@@ -20,7 +20,6 @@ public sealed partial class MainWindow : Window
     private readonly IPackageService _packageService;
     private readonly IManifestService _manifestService;
     private readonly ISessionState _sessionState;
-    private readonly IBuildSettingsService _buildSettings;
     private readonly MainViewModel _mainViewModel;
     private bool _suppressNavSelection;
     private string? _currentTag;
@@ -40,7 +39,6 @@ public sealed partial class MainWindow : Window
         IPackageService packageService,
         IManifestService manifestService,
         ISessionState sessionState,
-        IBuildSettingsService buildSettings,
         MainViewModel mainViewModel)
     {
         ArgumentNullException.ThrowIfNull(repositoryService);
@@ -48,14 +46,12 @@ public sealed partial class MainWindow : Window
         ArgumentNullException.ThrowIfNull(packageService);
         ArgumentNullException.ThrowIfNull(manifestService);
         ArgumentNullException.ThrowIfNull(sessionState);
-        ArgumentNullException.ThrowIfNull(buildSettings);
         ArgumentNullException.ThrowIfNull(mainViewModel);
         _repositoryService = repositoryService;
         _gitService = gitService;
         _packageService = packageService;
         _manifestService = manifestService;
         _sessionState = sessionState;
-        _buildSettings = buildSettings;
         _mainViewModel = mainViewModel;
 
         InitializeComponent();
@@ -68,30 +64,10 @@ public sealed partial class MainWindow : Window
 
         _repositoryService.RepositoryChanged += OnRepositoryChanged;
         _sessionState.Changed += OnSessionStateChanged;
-        _buildSettings.ProjectsFolderChanged += OnBuildProjectsFolderChanged;
         UpdateRepoTitle(_repositoryService.CurrentRepository);
         UpdateNavEnabled(_repositoryService.CurrentRepository is not null);
         UpdateSaveAllButton();
         _ = RefreshGitIndicatorAsync(_repositoryService.CurrentRepository);
-        _ = RefreshBuildNavVisibilityAsync();
-    }
-
-    private async void OnBuildProjectsFolderChanged(object? sender, EventArgs e)
-    {
-        if (DispatcherQueue is null || DispatcherQueue.HasThreadAccess)
-        {
-            await RefreshBuildNavVisibilityAsync().ConfigureAwait(true);
-        }
-        else
-        {
-            DispatcherQueue.TryEnqueue(async () => await RefreshBuildNavVisibilityAsync().ConfigureAwait(true));
-        }
-    }
-
-    private async Task RefreshBuildNavVisibilityAsync()
-    {
-        var hasFolder = await _buildSettings.HasProjectsFolderAsync().ConfigureAwait(true);
-        NavBuild.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnSessionStateChanged(object? sender, EventArgs e)
@@ -356,6 +332,64 @@ public sealed partial class MainWindow : Window
         {
             return false;
         }
+    }
+
+    private void OnNavViewLoaded(object sender, RoutedEventArgs e)
+    {
+        // Swap the default hamburger PaneToggleButton glyph for the Lucide menu
+        // glyph so the toggle matches the rest of the rail. The button is named
+        // "TogglePaneButton" in NavigationView's control template; we walk the
+        // visual tree to find it once the template is applied. FontIcon tints
+        // with Foreground natively, so light/dark theme handling is automatic.
+        if (NavView is null) return;
+        var toggle = FindDescendant<Button>(NavView, "TogglePaneButton");
+        if (toggle is not null)
+        {
+            toggle.Content = new FontIcon
+            {
+                FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("ms-appx:///Assets/Fonts/lucide.ttf#lucide"),
+                Glyph = "",
+            };
+        }
+
+        // Replace NavGit's icon with a stroked Path matching the title bar's
+        // GitIndicator exactly. The Lucide font's git-branch glyph rendered
+        // visibly thinner than the title bar's 2px-stroked Path at rail size;
+        // by swapping the IconBox's Child for the same Path the title bar uses,
+        // both visuals stay in lockstep. NavigationViewItemPresenter's IconBox
+        // is a Viewbox once the template applies.
+        var iconBox = FindDescendant<Viewbox>(NavGit, "IconBox");
+        if (iconBox is not null)
+        {
+            const string pathXaml =
+                "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+                "Width=\"24\" Height=\"24\" " +
+                "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
+                "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
+                "Fill=\"Transparent\" " +
+                "Data=\"M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z " +
+                "M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18\" />";
+            var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
+            path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
+            {
+                Source = NavGit,
+                Path = new PropertyPath("Foreground"),
+            });
+            iconBox.Child = path;
+        }
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
+    {
+        var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            if (child is T fe && string.Equals(fe.Name, name, StringComparison.Ordinal)) return fe;
+            var found = FindDescendant<T>(child, name);
+            if (found is not null) return found;
+        }
+        return null;
     }
 
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)

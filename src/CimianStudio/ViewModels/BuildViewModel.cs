@@ -64,7 +64,10 @@ public sealed partial class BuildViewModel : ObservableObject
             return;
         }
 
-        AllProjects = [.. await _buildService.DiscoverProjectsAsync(folder, cancellationToken).ConfigureAwait(false)];
+        // Don't use ConfigureAwait(false) here — ApplyFilter mutates FilteredProjects,
+        // which is bound as the project ListView's ItemsSource. CollectionChanged must
+        // fire on the UI thread or WinUI throws COMException across the marshaller.
+        AllProjects = [.. await _buildService.DiscoverProjectsAsync(folder, cancellationToken).ConfigureAwait(true)];
         ApplyFilter();
     }
 
