@@ -65,10 +65,10 @@ public interface IPackageService
 
     /// <summary>
     /// Manually fires <see cref="PackagesChanged"/>. Used by the import wizard
-    /// after handing the actual disk write off to <c>Cimian.CLI.Cimiimport.Services.ImportService</c>:
-    /// since that path bypasses <see cref="CreatePackageAsync"/>, the event
-    /// won't fire on its own and downstream views (Packages tab, Catalogs tab)
-    /// won't refresh.
+    /// after shelling out to <c>cimiimport.exe</c>: that path writes pkginfos
+    /// directly to disk and bypasses <see cref="CreatePackageAsync"/>, so the
+    /// event won't fire on its own and downstream views (Packages tab,
+    /// Catalogs tab) won't refresh.
     /// </summary>
     void NotifyPackagesChanged();
 
