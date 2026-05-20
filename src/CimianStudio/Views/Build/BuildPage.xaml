@@ -3,7 +3,8 @@
     x:Class="CimianStudio.Views.Build.BuildPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:muxc="using:Microsoft.UI.Xaml.Controls">
+    xmlns:muxc="using:Microsoft.UI.Xaml.Controls"
+    xmlns:build="using:CimianStudio.Views.Build">
 
     <Grid>
         <Grid.ColumnDefinitions>
@@ -23,7 +24,9 @@
                 <TextBlock Text="Build" Style="{StaticResource TitleLargeTextBlockStyle}" />
                 <TextBlock x:Name="ProjectCountText"
                            Style="{StaticResource CaptionTextBlockStyle}"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Text="Initializing…" />
             </StackPanel>
 
             <Grid Grid.Row="1" Margin="0,0,0,8" ColumnSpacing="6">
@@ -193,7 +196,9 @@
                         </Grid>
                     </Border>
 
-                    <!-- Build Info: four-column typed form. -->
+                    <!-- Build Info: three-column typed form for the day-to-day fields,
+                         with an Advanced expander below holding the rarely-used MSI /
+                         metadata extras. Mirrors the cimipkg build-info.yaml schema. -->
                     <Border x:Name="BuildInfoBorder"
                             Style="{StaticResource CardStyle}"
                             Padding="16"
@@ -206,15 +211,31 @@
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
                                 </Grid.ColumnDefinitions>
-                                <!-- Each column StackPanel is populated by code-behind so we
-                                     can grow/shrink fields without a XAML mutation. -->
                                 <StackPanel x:Name="ColPackage"  Grid.Column="0" Spacing="8" />
                                 <StackPanel x:Name="ColOptions"  Grid.Column="1" Spacing="8" />
                                 <StackPanel x:Name="ColSigning"  Grid.Column="2" Spacing="8" />
-                                <StackPanel x:Name="ColMsi"      Grid.Column="3" Spacing="8" />
                             </Grid>
+                            <!-- Advanced is wired up and routed by PopulateBuildInfoForm but
+                                 hidden from the UI for now — the day-to-day three columns
+                                 cover everything most projects need. Flip this Visibility
+                                 to "Visible" to surface it again. -->
+                            <Expander x:Name="AdvancedExpander"
+                                      Header="Advanced"
+                                      Visibility="Collapsed"
+                                      HorizontalAlignment="Stretch"
+                                      HorizontalContentAlignment="Stretch">
+                                <Grid ColumnSpacing="20">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel x:Name="ColAdvancedPackage" Grid.Column="0" Spacing="8" />
+                                    <StackPanel x:Name="ColAdvancedInstall" Grid.Column="1" Spacing="8" />
+                                    <StackPanel x:Name="ColAdvancedMsi"     Grid.Column="2" Spacing="8" />
+                                </Grid>
+                            </Expander>
                         </StackPanel>
                     </Border>
 
@@ -233,24 +254,84 @@
                                 <TextBlock Text="Payload"
                                            Style="{StaticResource BodyStrongTextBlockStyle}" />
                                 <StackPanel Orientation="Horizontal" Spacing="6">
-                                    <Button Content="New Folder" Click="OnPayloadNewFolderClicked" />
-                                    <Button Content="Add Files" Click="OnPayloadAddFilesClicked" />
-                                    <Button Content="Delete" Click="OnPayloadDeleteClicked" />
-                                    <Button Content="Reveal" Click="OnPayloadRevealClicked" />
+                                    <!-- Win11 File Explorer-style command bar buttons:
+                                         Segoe Fluent Icons glyph + label. Glyphs:
+                                           E8F4 NewFolder
+                                           E710 Add
+                                           E74D Delete
+                                           E838 FolderOpen
+                                           E740 FullScreen (stand-in for Expand All) -->
+                                    <Button Click="OnPayloadNewFolderClicked">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Glyph="&#xE8F4;" />
+                                            <TextBlock Text="New Folder" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnPayloadAddFilesClicked">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Glyph="&#xE710;" />
+                                            <TextBlock Text="Add Files" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnPayloadDeleteClicked">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Glyph="&#xE74D;" />
+                                            <TextBlock Text="Delete" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Click="OnPayloadRevealClicked">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="14" Glyph="&#xE838;" />
+                                            <TextBlock Text="Reveal" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="PayloadExpandToggle"
+                                            Visibility="Collapsed"
+                                            Click="OnPayloadExpandToggleClicked">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon x:Name="PayloadExpandIcon"
+                                                      FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                      FontSize="14"
+                                                      Glyph="&#xE73F;" />
+                                            <TextBlock x:Name="PayloadExpandLabel" Text="Collapse" />
+                                        </StackPanel>
+                                    </Button>
                                 </StackPanel>
                                 <muxc:TreeView x:Name="PayloadTree"
-                                               MinHeight="240"
                                                MaxHeight="480"
                                                AllowDrop="True"
                                                DragOver="OnPayloadDragOver"
                                                Drop="OnPayloadDrop"
                                                DoubleTapped="OnPayloadDoubleTapped"
                                                RightTapped="OnPayloadRightTapped"
-                                               SelectionMode="Single" />
-                                <Button x:Name="PayloadExpandToggle"
-                                        Content="Expand All / Collapse All"
-                                        HorizontalAlignment="Stretch"
-                                        Click="OnPayloadExpandToggleClicked" />
+                                               SelectionMode="Single">
+                                    <muxc:TreeView.ItemTemplate>
+                                        <!-- ItemsSource-mode binding: each row's DataContext
+                                             is a PayloadTreeNode and TreeViewItem.ItemsSource
+                                             walks its Children for the hierarchy. RootNodes
+                                             mode ignores ItemTemplate, which is why earlier
+                                             attempts showed only chevrons. -->
+                                        <DataTemplate x:DataType="build:PayloadTreeNode">
+                                            <!-- IsExpanded="True" so the tree shows
+                                                 every folder open by default — payload
+                                                 trees are typically small and admins
+                                                 want to see structure at a glance. -->
+                                            <muxc:TreeViewItem ItemsSource="{x:Bind Children}"
+                                                               IsExpanded="True">
+                                                <StackPanel Orientation="Horizontal"
+                                                            Spacing="8"
+                                                            VerticalAlignment="Center">
+                                                    <FontIcon FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets"
+                                                              FontSize="14"
+                                                              Glyph="{x:Bind Glyph}"
+                                                              Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                    <TextBlock Text="{x:Bind Name}"
+                                                               VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </muxc:TreeViewItem>
+                                        </DataTemplate>
+                                    </muxc:TreeView.ItemTemplate>
+                                </muxc:TreeView>
                             </StackPanel>
                         </Border>
 
