@@ -29,14 +29,9 @@
     <ProjectReference Include="..\CimianStudio.Core\CimianStudio.Core.csproj" />
     <ProjectReference Include="..\CimianStudio.Infrastructure\CimianStudio.Infrastructure.csproj" />
     <ProjectReference Include="..\CimianStudio.Shared\CimianStudio.Shared.csproj" />
-    <!-- Cimian.Import is the upstream cimiimport workflow as a library (split
-         out of cli/cimiimport so admin UIs can reference it without falling
-         foul of NETSDK1151 on self-contained exes). The WinUI Import tab
-         plugs a WinUIImportPrompter into the same code path the cimiimport
-         CLI uses. Relative path assumes the sibling-submodule layout under
-         the parent Cimian repo. -->
-    <ProjectReference Include="..\..\..\..\packages\CimianTools\shared\import\Cimian.Import.csproj"
-                      Private="true" />
+    <!-- No cross-repo references. The Build and Import tabs invoke Cimian's
+         installed CLIs (cimipkg.exe / cimiimport.exe) via Process.Start. See
+         CimianStudio.Infrastructure.csproj for the rationale. -->
   </ItemGroup>
 
   <ItemGroup>

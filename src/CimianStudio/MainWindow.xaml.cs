@@ -20,6 +20,7 @@ public sealed partial class MainWindow : Window
     private readonly IPackageService _packageService;
     private readonly IManifestService _manifestService;
     private readonly ISessionState _sessionState;
+    private readonly IBuildSettingsService _buildSettings;
     private readonly MainViewModel _mainViewModel;
     private bool _suppressNavSelection;
     private string? _currentTag;
@@ -39,6 +40,7 @@ public sealed partial class MainWindow : Window
         IPackageService packageService,
         IManifestService manifestService,
         ISessionState sessionState,
+        IBuildSettingsService buildSettings,
         MainViewModel mainViewModel)
     {
         ArgumentNullException.ThrowIfNull(repositoryService);
@@ -46,12 +48,14 @@ public sealed partial class MainWindow : Window
         ArgumentNullException.ThrowIfNull(packageService);
         ArgumentNullException.ThrowIfNull(manifestService);
         ArgumentNullException.ThrowIfNull(sessionState);
+        ArgumentNullException.ThrowIfNull(buildSettings);
         ArgumentNullException.ThrowIfNull(mainViewModel);
         _repositoryService = repositoryService;
         _gitService = gitService;
         _packageService = packageService;
         _manifestService = manifestService;
         _sessionState = sessionState;
+        _buildSettings = buildSettings;
         _mainViewModel = mainViewModel;
 
         InitializeComponent();
@@ -64,10 +68,30 @@ public sealed partial class MainWindow : Window
 
         _repositoryService.RepositoryChanged += OnRepositoryChanged;
         _sessionState.Changed += OnSessionStateChanged;
+        _buildSettings.ProjectsFolderChanged += OnBuildProjectsFolderChanged;
         UpdateRepoTitle(_repositoryService.CurrentRepository);
         UpdateNavEnabled(_repositoryService.CurrentRepository is not null);
         UpdateSaveAllButton();
         _ = RefreshGitIndicatorAsync(_repositoryService.CurrentRepository);
+        _ = RefreshBuildNavVisibilityAsync();
+    }
+
+    private async void OnBuildProjectsFolderChanged(object? sender, EventArgs e)
+    {
+        if (DispatcherQueue is null || DispatcherQueue.HasThreadAccess)
+        {
+            await RefreshBuildNavVisibilityAsync().ConfigureAwait(true);
+        }
+        else
+        {
+            DispatcherQueue.TryEnqueue(async () => await RefreshBuildNavVisibilityAsync().ConfigureAwait(true));
+        }
+    }
+
+    private async Task RefreshBuildNavVisibilityAsync()
+    {
+        var hasFolder = await _buildSettings.HasProjectsFolderAsync().ConfigureAwait(true);
+        NavBuild.Visibility = hasFolder ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnSessionStateChanged(object? sender, EventArgs e)
@@ -432,6 +456,9 @@ public sealed partial class MainWindow : Window
         NavManifests.IsEnabled = enabled;
         NavCatalogs.IsEnabled = enabled;
         NavGit.IsEnabled = enabled;
+        // Build operates on cimipkg projects and doesn't need an open repository,
+        // so its enablement is governed by the projects-folder setting (visibility),
+        // not by repo state.
     }
 
     private NavigationViewItem? FindNavItem(string tag)
@@ -444,6 +471,7 @@ public sealed partial class MainWindow : Window
             "manifests" => NavManifests,
             "catalogs" => NavCatalogs,
             "git" => NavGit,
+            "build" => NavBuild,
             "settings" => NavSettings,
             _ => null,
         };
@@ -460,6 +488,7 @@ public sealed partial class MainWindow : Window
             "catalogs" => App.Resolve<CatalogsPage>(),
             "import" => App.Resolve<Views.Import.ImportPage>(),
             "git" => App.Resolve<GitPage>(),
+            "build" => App.Resolve<Views.Build.BuildPage>(),
             "settings" => App.Resolve<Views.Settings.SettingsPage>(),
             _ => null,
         };

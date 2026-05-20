@@ -5,153 +5,88 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:local="using:CimianStudio.Views">
 
-    <Grid Padding="20" RowSpacing="16">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
-
-        <StackPanel Grid.Row="0" Spacing="6">
-            <TextBlock Text="Import"
-                       Style="{StaticResource TitleLargeTextBlockStyle}" />
-            <TextBlock Text="Drop one or more installer files (MSI / EXE / NUPKG / MSIX) anywhere on this page — or use the picker below to select several at once. A single file opens the wizard immediately; multiple files queue up for batch import."
-                       Style="{StaticResource CaptionTextBlockStyle}"
-                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                       TextWrapping="Wrap" />
-        </StackPanel>
-
-        <!-- Idle view: drop-zone on top, batch queue below (visible only when the
-             user dropped multiple files). Single-file drops bypass this entirely
-             and go straight into the wizard. -->
-        <Grid x:Name="IdleView" Grid.Row="1" RowSpacing="12">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Padding="20" RowSpacing="16">
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" MinHeight="180" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0"
+            <StackPanel Grid.Row="0" Spacing="6">
+                <TextBlock Text="Import"
+                           Style="{StaticResource TitleLargeTextBlockStyle}" />
+                <TextBlock Text="Drop installer files (MSI / EXE / MSIX / NUPKG) below or pick them. CimianStudio runs cimiimport.exe for each file with the options you set — name, version, developer, catalogs, etc. come from the installer itself and can be tweaked afterward in the Package Editor."
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+
+            <!-- Tool-missing banner. Visible when cimiimport.exe can't be located. -->
+            <InfoBar Grid.Row="1"
+                     x:Name="ToolMissingBar"
+                     IsClosable="False"
+                     IsOpen="False"
+                     Severity="Warning"
+                     Title="cimiimport.exe not found"
+                     Message="Install Cimian or set the path in Settings → Import." />
+
+            <!-- Drop zone -->
+            <Border Grid.Row="2"
+                    x:Name="DropZone"
                     Style="{StaticResource CardStyle}"
                     Shadow="{StaticResource CardShadow}"
                     Translation="0,0,16"
                     AllowDrop="True"
                     DragOver="OnDropZoneDragOver"
-                    Drop="OnDropZoneDrop">
-                <Grid>
-                    <StackPanel HorizontalAlignment="Center"
-                                VerticalAlignment="Center"
-                                Spacing="12">
-                        <Viewbox Width="48" Height="48">
-                            <Path Width="24" Height="24" Style="{StaticResource LucidePath}"
-                                  Stroke="{ThemeResource TextFillColorTertiaryBrush}"
-                                  Data="M21,15 V19 A2,2 0 0 1 19,21 H5 A2,2 0 0 1 3,19 V15 M17,8 L12,3 L7,8 M12,3 V15" />
-                        </Viewbox>
-                        <TextBlock Text="Drop one or more installer files here"
-                                   Style="{StaticResource SubtitleTextBlockStyle}"
-                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Text="Drop a single file to open the wizard, or several to queue a batch import."
-                                   Style="{StaticResource CaptionTextBlockStyle}"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   HorizontalAlignment="Center"
-                                   TextAlignment="Center"
-                                   MaxWidth="380"
-                                   TextWrapping="Wrap" />
-                        <Button x:Name="PickFileButton"
-                                Content="Or pick one or more files…"
-                                HorizontalAlignment="Center"
-                                Click="OnPickFileClicked" />
-                        <TextBlock x:Name="StatusText"
-                                   Style="{StaticResource CaptionTextBlockStyle}"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   HorizontalAlignment="Center"
-                                   TextAlignment="Center"
-                                   MaxWidth="420"
-                                   TextWrapping="Wrap" />
-                    </StackPanel>
-                </Grid>
+                    Drop="OnDropZoneDrop"
+                    MinHeight="160">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="10">
+                    <Viewbox Width="40" Height="40">
+                        <Path Width="24" Height="24" Style="{StaticResource LucidePath}"
+                              Stroke="{ThemeResource TextFillColorTertiaryBrush}"
+                              Data="M21,15 V19 A2,2 0 0 1 19,21 H5 A2,2 0 0 1 3,19 V15 M17,8 L12,3 L7,8 M12,3 V15" />
+                    </Viewbox>
+                    <TextBlock Text="Drop installer files here, or…"
+                               Style="{StaticResource SubtitleTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               HorizontalAlignment="Center" />
+                    <Button x:Name="PickFileButton"
+                            Content="Pick installer files…"
+                            HorizontalAlignment="Center"
+                            Click="OnPickFileClicked" />
+                </StackPanel>
             </Border>
 
-            <!-- Batch queue. Visible only when ViewModel.Queue has items. -->
-            <Border x:Name="QueuePanel"
-                    Grid.Row="1"
+            <!-- Queue + per-file status -->
+            <Border Grid.Row="3"
+                    x:Name="QueueBorder"
                     Style="{StaticResource CardStyle}"
-                    Shadow="{StaticResource CardShadow}"
-                    Translation="0,0,16"
-                    Padding="16,12,16,12"
+                    Padding="16"
                     Visibility="Collapsed">
-                <StackPanel Spacing="10">
-                    <Grid ColumnSpacing="12">
+                <StackPanel Spacing="8">
+                    <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Spacing="2">
-                            <TextBlock x:Name="QueueHeader"
-                                       Style="{StaticResource BodyStrongTextBlockStyle}"
-                                       Text="Batch queue" />
-                            <TextBlock Text="Process imports back-to-back. The catalog and subdirectory chosen here apply to every file in the queue; filename-detected architecture still wins per file."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
+                        <TextBlock Text="Queue"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   VerticalAlignment="Center" />
                         <Button Grid.Column="1"
-                                x:Name="ClearQueueButton"
                                 Content="Clear"
                                 Click="OnClearQueueClicked" />
-                        <Button Grid.Column="2"
-                                x:Name="ProcessQueueButton"
-                                Content="Process queue"
-                                Style="{StaticResource AccentButtonStyle}"
-                                Click="OnProcessQueueClicked" />
-                        <Button Grid.Column="2"
-                                x:Name="QueueOpenInGitButton"
-                                Content="Commit batch in Git tab"
-                                Style="{StaticResource AccentButtonStyle}"
-                                Visibility="Collapsed"
-                                Click="OnQueueOpenInGitClicked" />
                     </Grid>
-
-                    <Grid ColumnSpacing="8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="*" />
-                        </Grid.ColumnDefinitions>
-                        <StackPanel Grid.Column="0" Spacing="4">
-                            <TextBlock Text="Default catalog" Style="{StaticResource CaptionTextBlockStyle}" />
-                            <ComboBox x:Name="BatchCatalogCombo"
-                                      HorizontalAlignment="Stretch"
-                                      IsEditable="True" />
-                        </StackPanel>
-                        <StackPanel Grid.Column="1" Spacing="4">
-                            <TextBlock Text="Repo subdirectory (optional)" Style="{StaticResource CaptionTextBlockStyle}" />
-                            <TextBox x:Name="BatchSubdirBox"
-                                     PlaceholderText="apps (leave blank for top-level)" />
-                        </StackPanel>
-                    </Grid>
-
-                    <!-- Per-item template inheritance toggle. ON (default) matches the
-                         legacy batch behaviour: when a name-match exists in All.yaml,
-                         pull catalogs / scripts / blocking_apps / Requires / OS bounds
-                         from it. OFF starts each pkginfo fresh from extractor data. -->
-                    <StackPanel Spacing="2">
-                        <CheckBox x:Name="BatchUseTemplateCheck"
-                                  Content="Inherit from existing pkginfo when name matches"
-                                  IsChecked="True" />
-                        <TextBlock Text="When checked, batch imports reuse scripts and metadata from a same-name package already in the repo. Uncheck to start each pkginfo from scratch."
-                                   Style="{StaticResource CaptionTextBlockStyle}"
-                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                   TextWrapping="Wrap"
-                                   Margin="28,0,0,0" />
-                    </StackPanel>
-
                     <ListView x:Name="QueueListView"
                               ItemsSource="{x:Bind ViewModel.Queue}"
                               SelectionMode="None"
-                              MaxHeight="320">
+                              MaxHeight="240">
                         <ListView.ItemTemplate>
                             <DataTemplate>
-                                <Grid Padding="4,6,4,6" ColumnSpacing="12">
+                                <Grid Padding="4,6,4,6" ColumnSpacing="10">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -159,13 +94,11 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Spacing="2">
                                         <TextBlock Text="{Binding FileName}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" />
+                                                   TextTrimming="CharacterEllipsis" />
                                         <TextBlock Text="{Binding StatusText}"
                                                    Style="{StaticResource CaptionTextBlockStyle}"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   VerticalAlignment="Center" />
+                                                   TextTrimming="CharacterEllipsis" />
                                     </StackPanel>
                                     <TextBlock Grid.Column="1"
                                                Text="{Binding Status}"
@@ -186,272 +119,137 @@
                     </ListView>
                 </StackPanel>
             </Border>
-        </Grid>
 
-        <Grid x:Name="WizardView" Grid.Row="1" Visibility="Collapsed" RowSpacing="12">
-            <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="*" />
-                <RowDefinition Height="Auto" />
-            </Grid.RowDefinitions>
-
-            <Grid Grid.Row="0" ColumnSpacing="12">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0"
-                           x:Name="WizardStepLabel"
-                           Text="Step 1 of 4 · Review"
-                           Style="{StaticResource CaptionTextBlockStyle}"
-                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                           VerticalAlignment="Center" />
-                <TextBlock Grid.Column="1"
-                           x:Name="WizardFileName"
-                           Style="{StaticResource BodyStrongTextBlockStyle}"
-                           TextTrimming="CharacterEllipsis"
-                           VerticalAlignment="Center" />
-                <HyperlinkButton Grid.Column="2"
-                                 Content="Pick a different file…"
-                                 Click="OnRestartClicked" />
-            </Grid>
-
-            <!-- Step body card. Each step swaps in a different panel via code-behind. -->
-            <Border Grid.Row="1"
+            <!-- cimiimport options -->
+            <Border Grid.Row="4"
+                    x:Name="OptionsBorder"
                     Style="{StaticResource CardStyle}"
-                    Shadow="{StaticResource CardShadow}"
-                    Translation="0,0,16"
-                    Padding="20,16,20,16">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <Grid>
-                        <!-- Step 1: detected facts + template match. -->
-                        <StackPanel x:Name="Step1Panel" Spacing="16">
-                            <InfoBar x:Name="TemplateBanner"
-                                     IsClosable="False"
-                                     IsOpen="False"
-                                     Severity="Informational">
-                                <InfoBar.Content>
-                                    <StackPanel Orientation="Horizontal" Spacing="6" Margin="0,0,0,8">
-                                        <Button x:Name="UseTemplateButton"
-                                                Content="Use template"
-                                                Style="{StaticResource AccentButtonStyle}"
-                                                Click="OnUseTemplateClicked" />
-                                        <Button x:Name="StartFreshButton"
-                                                Content="Start fresh"
-                                                Click="OnStartFreshClicked" />
-                                    </StackPanel>
-                                </InfoBar.Content>
-                            </InfoBar>
+                    Padding="16"
+                    Visibility="Collapsed">
+                <StackPanel Spacing="10">
+                    <TextBlock Text="cimiimport options"
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <TextBlock Text="Applied to every file in the queue. Anything not set falls back to cimiimport's defaults / autodetection."
+                               Style="{StaticResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="Wrap" />
 
-                            <TextBlock Text="Detected metadata"
-                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <Grid ColumnSpacing="12" RowSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
 
-                            <Grid x:Name="DetectedGrid" ColumnSpacing="20" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="140" />
-                                    <ColumnDefinition Width="*" />
-                                </Grid.ColumnDefinitions>
-                            </Grid>
-
-                            <TextBlock x:Name="ExtractError"
-                                       Visibility="Collapsed"
-                                       Foreground="{ThemeResource SystemFillColorCriticalBrush}"
-                                       TextWrapping="Wrap" />
+                        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="Architecture override (--arch)" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <ComboBox x:Name="ArchCombo" HorizontalAlignment="Stretch">
+                                <ComboBoxItem Content="(auto-detect)" Tag="" IsSelected="True" />
+                                <ComboBoxItem Content="x64" Tag="x64" />
+                                <ComboBoxItem Content="arm64" Tag="arm64" />
+                                <ComboBoxItem Content="x64,arm64" Tag="x64,arm64" />
+                            </ComboBox>
                         </StackPanel>
-
-                        <!-- Step 2: edit detected metadata. Hidden until the user advances. -->
-                        <StackPanel x:Name="Step2Panel" Spacing="14" Visibility="Collapsed">
-                            <TextBlock Text="Edit metadata"
-                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <TextBlock Text="Adjust anything the extractor got wrong. Architecture and identity codes are read-only because they're sourced from the installer file."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" />
-
-                            <Grid ColumnSpacing="12" RowSpacing="10">
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="Uninstaller path (--uninstaller)" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <Grid ColumnSpacing="6">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                    <RowDefinition Height="Auto" />
-                                </Grid.RowDefinitions>
-
-                                <StackPanel Grid.Row="0" Grid.Column="0" Spacing="4">
-                                    <TextBlock Text="Name" Style="{StaticResource CaptionTextBlockStyle}" />
-                                    <TextBox x:Name="NameBox" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="0" Grid.Column="1" Spacing="4">
-                                    <TextBlock Text="Version" Style="{StaticResource CaptionTextBlockStyle}" />
-                                    <TextBox x:Name="VersionBox" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="1" Grid.Column="0" Spacing="4">
-                                    <TextBlock Text="Developer" Style="{StaticResource CaptionTextBlockStyle}" />
-                                    <TextBox x:Name="DeveloperBox" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
-                                    <TextBlock Text="Category" Style="{StaticResource CaptionTextBlockStyle}" />
-                                    <TextBox x:Name="CategoryBox" />
-                                </StackPanel>
-                                <StackPanel Grid.Row="2" Grid.Column="0" Spacing="4">
-                                    <TextBlock Text="Architecture" Style="{StaticResource CaptionTextBlockStyle}" />
-                                    <ComboBox x:Name="ArchCombo" HorizontalAlignment="Stretch">
-                                        <ComboBoxItem Content="x64" Tag="x64" />
-                                        <ComboBoxItem Content="arm64" Tag="arm64" />
-                                        <ComboBoxItem Content="x64 + arm64" Tag="x64,arm64" />
-                                    </ComboBox>
-                                </StackPanel>
-                                <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4" Orientation="Horizontal" VerticalAlignment="Bottom">
-                                    <CheckBox x:Name="UnattendedInstallCheck" Content="Unattended install" />
-                                    <CheckBox x:Name="UnattendedUninstallCheck" Content="Unattended uninstall" />
-                                </StackPanel>
+                                <TextBox x:Name="UninstallerBox" PlaceholderText="(none)" />
+                                <Button Grid.Column="1" Content="Browse…" Click="OnPickUninstallerClicked" />
                             </Grid>
-
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Description" Style="{StaticResource CaptionTextBlockStyle}" />
-                                <TextBox x:Name="DescriptionBox"
-                                         AcceptsReturn="True"
-                                         TextWrapping="Wrap"
-                                         MinHeight="60" />
-                            </StackPanel>
-
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Catalogs" Style="{StaticResource CaptionTextBlockStyle}" />
-                                <local:ChipListPicker x:Name="CatalogsPicker"
-                                                       PlaceholderText="Add a catalog…" />
-                            </StackPanel>
-
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Blocking applications" Style="{StaticResource CaptionTextBlockStyle}" />
-                                <TextBlock Text="Apps that must be closed before the install runs. Suggestions come from the existing package list."
-                                           Style="{StaticResource CaptionTextBlockStyle}"
-                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
-                                <local:ChipListPicker x:Name="BlockingPicker"
-                                                       PlaceholderText="Add a blocking app…" />
-                            </StackPanel>
                         </StackPanel>
 
-                        <!-- Step 4: location + final review. -->
-                        <StackPanel x:Name="Step4Panel" Spacing="14" Visibility="Collapsed">
-                            <TextBlock Text="Location and review"
-                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <TextBlock Text="The pkginfo and installer will be saved relative to the open repository. The preview below is the YAML that will be written."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" />
-
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="Repo subdirectory" Style="{StaticResource CaptionTextBlockStyle}" />
-                                <TextBox x:Name="SubdirBox"
-                                         PlaceholderText="apps/MyApp (leave blank for top-level)" />
-                                <TextBlock x:Name="ResolvedPathsText"
-                                           Style="{StaticResource CaptionTextBlockStyle}"
-                                           Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                           TextWrapping="Wrap" />
-                            </StackPanel>
-
-                            <StackPanel Spacing="4">
-                                <TextBlock Text="pkginfo preview"
-                                           Style="{StaticResource CaptionTextBlockStyle}" />
-                                <Border BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="4"
-                                        Background="{ThemeResource LayerFillColorDefaultBrush}"
-                                        Padding="10"
-                                        MaxHeight="320">
-                                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
-                                                  VerticalScrollBarVisibility="Auto">
-                                        <TextBlock x:Name="YamlPreviewText"
-                                                   FontFamily="Cascadia Mono, Consolas"
-                                                   FontSize="12"
-                                                   TextWrapping="NoWrap"
-                                                   IsTextSelectionEnabled="True" />
-                                    </ScrollViewer>
-                                </Border>
-                            </StackPanel>
-
-                            <InfoBar x:Name="SaveStatusBar"
-                                     IsClosable="False"
-                                     IsOpen="False"
-                                     Severity="Informational">
-                                <InfoBar.ActionButton>
-                                    <Button x:Name="OpenInGitButton"
-                                            Content="Commit in Git tab"
-                                            Visibility="Collapsed"
-                                            Click="OnOpenInGitClicked" />
-                                </InfoBar.ActionButton>
-                            </InfoBar>
+                        <StackPanel Grid.Row="1" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="Minimum OS version (--minimum_os_version)" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <TextBox x:Name="MinOsBox" PlaceholderText="e.g. 10.0.19041" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="4">
+                            <TextBlock Text="Maximum OS version (--maximum_os_version)" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <TextBox x:Name="MaxOsBox" PlaceholderText="(none)" />
                         </StackPanel>
 
-                        <!-- Step 3: install / uninstall scripts. Pivot keeps the wizard
-                             from getting overwhelmed by six full-size editors stacked. -->
-                        <StackPanel x:Name="Step3Panel" Spacing="10" Visibility="Collapsed">
-                            <TextBlock Text="Scripts"
-                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
-                            <TextBlock Text="Optional PowerShell run by Cimian around install / uninstall. Empty slots are omitted from the pkginfo. Exit-code semantics for the *_check scripts match Munki: 0 means the action is needed."
-                                       Style="{StaticResource CaptionTextBlockStyle}"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       TextWrapping="Wrap" />
-                            <Pivot x:Name="ScriptsPivot">
-                                <PivotItem Header="Pre-install">
-                                    <local:ScriptEditor x:Name="PreinstallEditor"
-                                                         Label="preinstall_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                                <PivotItem Header="Post-install">
-                                    <local:ScriptEditor x:Name="PostinstallEditor"
-                                                         Label="postinstall_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                                <PivotItem Header="Pre-uninstall">
-                                    <local:ScriptEditor x:Name="PreuninstallEditor"
-                                                         Label="preuninstall_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                                <PivotItem Header="Post-uninstall">
-                                    <local:ScriptEditor x:Name="PostuninstallEditor"
-                                                         Label="postuninstall_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                                <PivotItem Header="Install check">
-                                    <local:ScriptEditor x:Name="InstallCheckEditor"
-                                                         Label="installcheck_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                                <PivotItem Header="Uninstall check">
-                                    <local:ScriptEditor x:Name="UninstallCheckEditor"
-                                                         Label="uninstallcheck_script"
-                                                         MinHeight="220" />
-                                </PivotItem>
-                            </Pivot>
+                        <StackPanel Grid.Row="2" Grid.Column="0" Spacing="4">
+                            <TextBlock Text="Minimum Cimian version (--minimum_cimian_version)" Style="{StaticResource CaptionTextBlockStyle}" />
+                            <TextBox x:Name="MinCimianBox" PlaceholderText="(none)" />
+                        </StackPanel>
+                        <StackPanel Grid.Row="2" Grid.Column="1" Spacing="4" VerticalAlignment="Bottom" Orientation="Horizontal">
+                            <CheckBox x:Name="ExtractIconCheck" Content="Extract icon (--extract-icon)" />
                         </StackPanel>
                     </Grid>
-                </ScrollViewer>
+
+                    <Expander Header="Scripts" Margin="0,4,0,0">
+                        <StackPanel Spacing="8">
+                            <TextBlock Text="Provide paths to PowerShell script files. cimiimport reads each and embeds it in the produced pkginfo."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       TextWrapping="Wrap" />
+                            <StackPanel x:Name="ScriptsPanel" Spacing="6" />
+                        </StackPanel>
+                    </Expander>
+                </StackPanel>
             </Border>
 
-            <Grid Grid.Row="2" ColumnSpacing="8">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <Button Grid.Column="0"
-                        x:Name="BackButton"
-                        Content="Back"
-                        Visibility="Collapsed"
-                        Click="OnBackClicked" />
-                <Button Grid.Column="2" Content="Cancel" Click="OnCancelClicked" />
-                <Button Grid.Column="3"
-                        x:Name="ContinueButton"
-                        Content="Continue"
-                        Style="{StaticResource AccentButtonStyle}"
-                        IsEnabled="False"
-                        Click="OnContinueClicked" />
-            </Grid>
+            <!-- Run + console + result -->
+            <Border Grid.Row="5"
+                    x:Name="RunBorder"
+                    Style="{StaticResource CardStyle}"
+                    Padding="16"
+                    Visibility="Collapsed">
+                <StackPanel Spacing="12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock x:Name="RunStatusText"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}"
+                                   VerticalAlignment="Center" />
+                        <Button Grid.Column="1"
+                                x:Name="RunButton"
+                                Content="Run cimiimport"
+                                Style="{StaticResource AccentButtonStyle}"
+                                Click="OnRunClicked"
+                                IsEnabled="False" />
+                    </Grid>
+                    <Border x:Name="ConsoleBorder"
+                            Background="{ThemeResource LayerFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="4"
+                            Visibility="Collapsed">
+                        <ScrollViewer x:Name="ConsoleScrollViewer"
+                                      VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Auto"
+                                      Height="200">
+                            <TextBlock x:Name="ConsoleText"
+                                       FontFamily="Cascadia Mono, Consolas"
+                                       FontSize="12"
+                                       TextWrapping="NoWrap"
+                                       Padding="10"
+                                       IsTextSelectionEnabled="True" />
+                        </ScrollViewer>
+                    </Border>
+                    <StackPanel x:Name="ResultActionsPanel"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                Visibility="Collapsed">
+                        <Button x:Name="OpenInPackageEditorButton"
+                                Content="Open most-recent pkginfo in Package Editor"
+                                Click="OnOpenInPackageEditorClicked" />
+                        <Button x:Name="OpenInGitButton"
+                                Content="Commit imports in Git tab"
+                                Click="OnOpenInGitClicked" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
         </Grid>
-    </Grid>
+    </ScrollViewer>
 </Page>
