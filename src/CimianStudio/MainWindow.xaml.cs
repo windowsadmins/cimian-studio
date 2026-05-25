@@ -358,8 +358,8 @@ public sealed partial class MainWindow : Window
         // by swapping the IconBox's Child for the same Path the title bar uses,
         // both visuals stay in lockstep. NavigationViewItemPresenter's IconBox
         // is a Viewbox once the template applies.
-        var iconBox = FindDescendant<Viewbox>(NavGit, "IconBox");
-        if (iconBox is not null)
+        var gitIconBox = FindDescendant<Viewbox>(NavGit, "IconBox");
+        if (gitIconBox is not null)
         {
             const string pathXaml =
                 "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
@@ -375,7 +375,29 @@ public sealed partial class MainWindow : Window
                 Source = NavGit,
                 Path = new PropertyPath("Foreground"),
             });
-            iconBox.Child = path;
+            gitIconBox.Child = path;
+        }
+
+        // Stroked Lucide "tags" Path for NavCategories — placeholder font glyph
+        // wouldn't carry the same stroke style as the rest of the rail.
+        var categoriesIconBox = FindDescendant<Viewbox>(NavCategories, "IconBox");
+        if (categoriesIconBox is not null)
+        {
+            const string pathXaml =
+                "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+                "Width=\"24\" Height=\"24\" " +
+                "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
+                "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
+                "Fill=\"Transparent\" " +
+                "Data=\"M20.59,13.41 L13.42,20.58 A2,2 0 0 1 10.59,20.58 L2,12 V2 H12 L20.59,10.59 " +
+                "A2,2 0 0 1 20.59,13.41 Z M7,7 H7.01\" />";
+            var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
+            path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
+            {
+                Source = NavCategories,
+                Path = new PropertyPath("Foreground"),
+            });
+            categoriesIconBox.Child = path;
         }
     }
 
@@ -489,6 +511,7 @@ public sealed partial class MainWindow : Window
         NavImport.IsEnabled = enabled;
         NavManifests.IsEnabled = enabled;
         NavCatalogs.IsEnabled = enabled;
+        NavCategories.IsEnabled = enabled;
         NavGit.IsEnabled = enabled;
         // Build operates on cimipkg projects and doesn't need an open repository,
         // so its enablement is governed by the projects-folder setting (visibility),
@@ -504,6 +527,7 @@ public sealed partial class MainWindow : Window
             "import" => NavImport,
             "manifests" => NavManifests,
             "catalogs" => NavCatalogs,
+            "categories" => NavCategories,
             "git" => NavGit,
             "build" => NavBuild,
             "settings" => NavSettings,
@@ -520,6 +544,7 @@ public sealed partial class MainWindow : Window
             "packages" => App.Resolve<PackagesPage>(),
             "manifests" => App.Resolve<ManifestsPage>(),
             "catalogs" => App.Resolve<CatalogsPage>(),
+            "categories" => App.Resolve<CategoriesPage>(),
             "import" => App.Resolve<Views.Import.ImportPage>(),
             "git" => App.Resolve<GitPage>(),
             "build" => App.Resolve<Views.Build.BuildPage>(),
