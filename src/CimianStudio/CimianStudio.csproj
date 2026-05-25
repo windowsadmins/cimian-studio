@@ -8,6 +8,7 @@
     <Platforms>x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon\AppIcon.ico</ApplicationIcon>
     <RootNamespace>CimianStudio</RootNamespace>
     <AssemblyName>CimianStudio</AssemblyName>
   </PropertyGroup>
@@ -35,6 +36,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Assets\**" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Assets\**" Exclude="Assets\AppIcon\*.source.*" CopyToOutputDirectory="PreserveNewest" />
+    <!-- EnableMsixTooling auto-includes everything under Assets\ as Content;
+         the build-time source PNG isn't needed at runtime, so remove it
+         explicitly to keep the unpacked payload lean. -->
+    <Content Remove="Assets\AppIcon\*.source.*" />
+    <None Include="Assets\AppIcon\*.source.*" />
   </ItemGroup>
 </Project>
