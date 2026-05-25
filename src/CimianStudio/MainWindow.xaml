@@ -166,6 +166,12 @@
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
+                <muxc:NavigationViewItem x:Name="NavDevelopers" Tag="developers" Content="Developers">
+                    <muxc:NavigationViewItem.Icon>
+                        <!-- Placeholder. OnNavViewLoaded swaps in a stroked Lucide users Path. -->
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
+                    </muxc:NavigationViewItem.Icon>
+                </muxc:NavigationViewItem>
                 <muxc:NavigationViewItem x:Name="NavGit" Tag="git" Content="Git">
                     <muxc:NavigationViewItem.Icon>
                         <!-- Placeholder. The actual icon is injected in
