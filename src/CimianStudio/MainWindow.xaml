@@ -166,6 +166,14 @@
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
+                <muxc:NavigationViewItem x:Name="NavIcons" Tag="icons" Content="Icons">
+                    <muxc:NavigationViewItem.Icon>
+                        <!-- Placeholder. OnNavViewLoaded swaps the Viewbox.Child for a
+                             stroked Lucide image Path so the stroke weight matches
+                             the rest of the rail exactly. -->
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
+                    </muxc:NavigationViewItem.Icon>
+                </muxc:NavigationViewItem>
                 <muxc:NavigationViewItem x:Name="NavGit" Tag="git" Content="Git">
                     <muxc:NavigationViewItem.Icon>
                         <!-- Placeholder. The actual icon is injected in
