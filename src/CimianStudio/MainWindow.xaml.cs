@@ -60,6 +60,16 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = Constants.AppName;
 
+        // Unpackaged WinUI 3 windows don't inherit the EXE's <ApplicationIcon>;
+        // wire the same .ico into the AppWindow so the title bar / taskbar /
+        // Alt-Tab thumbnail all show it. Best-effort — a missing or broken
+        // asset must not crash the app at startup.
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon", "AppIcon.ico");
+        if (File.Exists(iconPath))
+        {
+            try { AppWindow.SetIcon(iconPath); } catch { }
+        }
+
         SystemBackdrop = new MicaBackdrop();
 
         _repositoryService.RepositoryChanged += OnRepositoryChanged;
