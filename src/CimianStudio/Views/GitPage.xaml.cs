@@ -1509,42 +1509,85 @@ public sealed partial class GitPage : Page
     {
         if (sender is not ListView lv || lv.SelectedItem is not HistoryRow row || _info is null)
         {
-            HistoryDiffText.Inlines.Clear();
+            HistoryDiffContent.Children.Clear();
             HistoryDiffPlaceholder.Visibility = Visibility.Visible;
             return;
         }
 
         HistoryDiffPlaceholder.Visibility = Visibility.Collapsed;
         HistoryDiffLoading.IsActive = true;
-        HistoryDiffText.Inlines.Clear();
+        HistoryDiffContent.Children.Clear();
         try
         {
             var diff = await _gitService.GetCommitDiffAsync(_info, row.Sha).ConfigureAwait(true);
             if (string.IsNullOrEmpty(diff))
             {
-                HistoryDiffText.Inlines.Add(new Run
+                HistoryDiffContent.Children.Add(new TextBlock
                 {
                     Text = "(no diff — root commit or merge)",
                     Foreground = new SolidColorBrush(MutedColor),
+                    FontFamily = MonoFont,
                 });
             }
             else
             {
-                RenderColorizedDiff(diff, HistoryDiffText);
+                RenderStructuredDiff(diff, HistoryDiffContent, allowHunkActions: false);
             }
         }
         catch (Exception ex)
         {
-            HistoryDiffText.Inlines.Add(new Run
+            HistoryDiffContent.Children.Add(new TextBlock
             {
                 Text = $"(failed to compute diff: {ex.Message})",
                 Foreground = new SolidColorBrush(MutedColor),
+                FontFamily = MonoFont,
             });
         }
         finally
         {
             HistoryDiffLoading.IsActive = false;
         }
+    }
+
+    /// <summary>
+    /// Shared structured-diff rendering used by both the working-tree diff
+    /// (with hunk actions) and the historic commit diff (read-only).
+    /// </summary>
+    private void RenderStructuredDiff(string diff, StackPanel target, bool allowHunkActions)
+    {
+        var files = UnifiedDiffParser.Parse(diff);
+        if (files.Count == 0)
+        {
+            RenderColorizedFallbackInto(diff, target);
+            return;
+        }
+        foreach (var f in files)
+        {
+            target.Children.Add(BuildFileCard(f, allowHunkActions));
+        }
+    }
+
+    private void RenderColorizedFallbackInto(string diff, StackPanel target)
+    {
+        var tb = new TextBlock
+        {
+            FontFamily = MonoFont,
+            FontSize = 12,
+            TextWrapping = TextWrapping.NoWrap,
+            IsTextSelectionEnabled = true,
+        };
+        foreach (var rawLine in diff.Split('\n'))
+        {
+            var line = rawLine.TrimEnd('\r');
+            var color = LineColor(line);
+            tb.Inlines.Add(new Run
+            {
+                Text = line.Length == 0 ? " " : line,
+                Foreground = new SolidColorBrush(color),
+            });
+            tb.Inlines.Add(new LineBreak());
+        }
+        target.Children.Add(tb);
     }
 
     private async void OnFetchClicked(object sender, RoutedEventArgs e)
@@ -1917,8 +1960,13 @@ public sealed partial class GitPage : Page
         DiffHeader.Text = _selectedRow.Entry.RelativePath;
         OpenInEditorButton.Visibility = Visibility.Visible;
         DiffPlaceholder.Visibility = Visibility.Collapsed;
-        DiffText.Inlines.Clear();
-        DiffText.Inlines.Add(new Run { Text = "Loading…", Foreground = new SolidColorBrush(MutedColor) });
+        DiffContent.Children.Clear();
+        DiffContent.Children.Add(new TextBlock
+        {
+            Text = "Loading…",
+            Foreground = new SolidColorBrush(MutedColor),
+            FontFamily = MonoFont,
+        });
 
         string diff;
         try
@@ -1930,31 +1978,270 @@ public sealed partial class GitPage : Page
             diff = $"(failed to compute diff: {ex.Message})";
         }
 
-        DiffText.Inlines.Clear();
+        DiffContent.Children.Clear();
         if (string.IsNullOrEmpty(diff))
         {
-            DiffText.Inlines.Add(new Run { Text = "(no diff)", Foreground = new SolidColorBrush(MutedColor) });
+            DiffContent.Children.Add(new TextBlock
+            {
+                Text = "(no diff)",
+                Foreground = new SolidColorBrush(MutedColor),
+                FontFamily = MonoFont,
+            });
             return;
         }
-        RenderColorizedDiff(diff);
+
+        RenderStructuredDiff(diff, DiffContent, allowHunkActions: true);
     }
 
-    private void RenderColorizedDiff(string diff) => RenderColorizedDiff(diff, DiffText);
+    private static readonly FontFamily MonoFont = new("Cascadia Mono, Consolas");
+    private static readonly Color GutterColor = Color.FromArgb(0xFF, 0x8A, 0x8A, 0x8A);
+    private static readonly Color AddedRowColor = Color.FromArgb(0x55, 0x4E, 0xC9, 0x70);
+    private static readonly Color RemovedRowColor = Color.FromArgb(0x55, 0xE7, 0x6F, 0x6F);
+    private static readonly Color HunkBarColor = Color.FromArgb(0x55, 0x77, 0x9D, 0xFF);
 
-    private void RenderColorizedDiff(string diff, TextBlock target)
+    /// <summary>
+    /// Builds the per-file diff card: a header strip with the file path, a
+    /// short summary (chunks / insertions / deletions), and one stacked
+    /// "hunk card" per <see cref="DiffHunk"/>. Each hunk card carries its
+    /// own [Stage Chunk] / [Discard Chunk] buttons.
+    /// </summary>
+    private Border BuildFileCard(DiffFile file, bool allowHunkActions)
     {
-        target.Inlines.Clear();
-        foreach (var rawLine in diff.Split('\n'))
+        var stack = new StackPanel { Spacing = 0 };
+
+        // File header strip.
+        var header = new Grid
         {
-            var line = rawLine.TrimEnd('\r');
-            var color = LineColor(line);
-            target.Inlines.Add(new Run
-            {
-                Text = line.Length == 0 ? " " : line,
-                Foreground = new SolidColorBrush(color),
-            });
-            target.Inlines.Add(new LineBreak());
+            Padding = new Thickness(12, 8, 12, 8),
+            Background = (Brush)Application.Current.Resources["CardBackgroundFillColorSecondaryBrush"],
+            ColumnSpacing = 8,
+        };
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var pathText = new TextBlock
+        {
+            Text = file.DisplayPath,
+            Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(pathText, 0);
+        header.Children.Add(pathText);
+
+        var added = file.Hunks.Sum(h => h.AddedCount);
+        var removed = file.Hunks.Sum(h => h.RemovedCount);
+        var summary = new TextBlock
+        {
+            Text = $"{file.Hunks.Count} chunk{(file.Hunks.Count == 1 ? "" : "s")} · ",
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        summary.Inlines.Add(new Run
+        {
+            Text = $"+{added}",
+            Foreground = new SolidColorBrush(AddColor),
+        });
+        summary.Inlines.Add(new Run { Text = " / " });
+        summary.Inlines.Add(new Run
+        {
+            Text = $"-{removed}",
+            Foreground = new SolidColorBrush(RemoveColor),
+        });
+        Grid.SetColumn(summary, 1);
+        header.Children.Add(summary);
+        stack.Children.Add(header);
+
+        foreach (var hunk in file.Hunks)
+        {
+            stack.Children.Add(BuildHunkBlock(file, hunk, allowHunkActions));
         }
+
+        return new Border
+        {
+            Style = (Style)Application.Current.Resources["CardStyle"],
+            Child = stack,
+        };
+    }
+
+    private StackPanel BuildHunkBlock(DiffFile file, DiffHunk hunk, bool allowHunkActions)
+    {
+        var container = new StackPanel { Spacing = 0 };
+
+        // Hunk header bar: the @@ position + per-chunk action buttons.
+        var bar = new Grid
+        {
+            Padding = new Thickness(12, 6, 8, 6),
+            Background = new SolidColorBrush(HunkBarColor),
+            ColumnSpacing = 8,
+        };
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        bar.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var positionText = new TextBlock
+        {
+            Text = hunk.Header,
+            FontFamily = MonoFont,
+            FontSize = 12,
+            Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(positionText, 0);
+        bar.Children.Add(positionText);
+
+        if (allowHunkActions)
+        {
+            // Stage / Discard Chunk only make sense for the working-tree diff.
+            // Historic commit diffs in the History tab are read-only — those
+            // hunks can't be mutated retroactively.
+            var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            var stageButton = new Button { Content = "Stage Chunk", Padding = new Thickness(10, 4, 10, 4) };
+            stageButton.Click += async (_, _) => await ApplyHunkAsync(file, hunk, mode: HunkApplyMode.Stage).ConfigureAwait(true);
+            actions.Children.Add(stageButton);
+            var discardButton = new Button
+            {
+                Content = "Discard Chunk",
+                Padding = new Thickness(10, 4, 10, 4),
+            };
+            discardButton.Click += async (_, _) => await ApplyHunkAsync(file, hunk, mode: HunkApplyMode.Discard).ConfigureAwait(true);
+            actions.Children.Add(discardButton);
+            Grid.SetColumn(actions, 1);
+            bar.Children.Add(actions);
+        }
+
+        container.Children.Add(bar);
+
+        // Body: one row per diff line, two narrow gutters of line numbers + the
+        // raw line content. Background tint per kind so the eye can scan a hunk
+        // without re-reading each row's leading +/-.
+        var body = new Grid { Padding = new Thickness(0) };
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var oldLine = hunk.OldStart;
+        var newLine = hunk.NewStart;
+        var rowIdx = 0;
+        foreach (var dl in hunk.Lines)
+        {
+            body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            Color background = Colors.Transparent;
+            int? oldShow = null;
+            int? newShow = null;
+            switch (dl.Kind)
+            {
+                case DiffLineKind.Added:
+                    background = AddedRowColor;
+                    newShow = newLine++;
+                    break;
+                case DiffLineKind.Removed:
+                    background = RemovedRowColor;
+                    oldShow = oldLine++;
+                    break;
+                case DiffLineKind.Context:
+                    oldShow = oldLine++;
+                    newShow = newLine++;
+                    break;
+                case DiffLineKind.NoNewline:
+                    // The "\ No newline at end of file" marker — no line numbers.
+                    break;
+            }
+
+            // Old line number gutter.
+            var oldNum = new TextBlock
+            {
+                Text = oldShow?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                FontFamily = MonoFont,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(GutterColor),
+                TextAlignment = TextAlignment.Right,
+                Padding = new Thickness(0, 1, 6, 1),
+            };
+            Grid.SetRow(oldNum, rowIdx);
+            Grid.SetColumn(oldNum, 0);
+            body.Children.Add(oldNum);
+
+            var newNum = new TextBlock
+            {
+                Text = newShow?.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+                FontFamily = MonoFont,
+                FontSize = 11,
+                Foreground = new SolidColorBrush(GutterColor),
+                TextAlignment = TextAlignment.Right,
+                Padding = new Thickness(0, 1, 8, 1),
+            };
+            Grid.SetRow(newNum, rowIdx);
+            Grid.SetColumn(newNum, 1);
+            body.Children.Add(newNum);
+
+            // Content cell with background tint.
+            var contentCell = new Border
+            {
+                Background = new SolidColorBrush(background),
+                Padding = new Thickness(8, 1, 8, 1),
+            };
+            contentCell.Child = new TextBlock
+            {
+                Text = dl.Raw,
+                FontFamily = MonoFont,
+                FontSize = 12,
+                IsTextSelectionEnabled = true,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
+            };
+            Grid.SetRow(contentCell, rowIdx);
+            Grid.SetColumn(contentCell, 2);
+            body.Children.Add(contentCell);
+
+            rowIdx++;
+        }
+        container.Children.Add(body);
+
+        return container;
+    }
+
+    private enum HunkApplyMode { Stage, Discard }
+
+    private async Task ApplyHunkAsync(DiffFile file, DiffHunk hunk, HunkApplyMode mode)
+    {
+        if (_info is null) return;
+
+        // Stage = git apply --cached (move hunk into the index).
+        // Discard = git apply --reverse (undo the hunk in the working tree).
+        // If we ever add a real index-staged view, we'll also want
+        //   Unstage = git apply --cached --reverse.
+        var cached = mode == HunkApplyMode.Stage;
+        var reverse = mode == HunkApplyMode.Discard;
+
+        if (mode == HunkApplyMode.Discard)
+        {
+            var dialog = new ContentDialog
+            {
+                Title = "Discard this chunk?",
+                Content = $"This permanently undoes the {hunk.AddedCount + hunk.RemovedCount}-line change in {file.DisplayPath} between this hunk's boundaries.",
+                PrimaryButtonText = "Discard",
+                CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Content.XamlRoot,
+            };
+            if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        }
+
+        var patch = hunk.ToPatch(file);
+        var result = await _gitService.ApplyPatchAsync(_info, patch, cached, reverse).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError(mode == HunkApplyMode.Stage ? "Stage chunk failed" : "Discard chunk failed", result.Output);
+        }
+        else
+        {
+            ResultBar.Severity = InfoBarSeverity.Success;
+            ResultBar.Title = mode == HunkApplyMode.Stage ? "Chunk staged" : "Chunk discarded";
+            ResultBar.Message = string.IsNullOrEmpty(result.Output) ? "Done." : result.Output;
+            ResultBar.IsOpen = true;
+        }
+        await RefreshAsync().ConfigureAwait(true);
     }
 
     private Color LineColor(string line)
@@ -1967,7 +2254,6 @@ public sealed partial class GitPage : Page
             return AddColor;
         if (line.StartsWith('-'))
             return RemoveColor;
-        // Default body text: light-grey on dark backgrounds, near-black on light ones.
         return ActualTheme == ElementTheme.Dark
             ? Color.FromArgb(0xFF, 0xD4, 0xD4, 0xD4)
             : Color.FromArgb(0xFF, 0x1F, 0x1F, 0x1F);
@@ -1978,7 +2264,7 @@ public sealed partial class GitPage : Page
         DiffHeader.Text = "Diff";
         OpenInEditorButton.Visibility = Visibility.Collapsed;
         DiffPlaceholder.Visibility = Visibility.Visible;
-        DiffText.Inlines.Clear();
+        DiffContent.Children.Clear();
     }
 
     private async void OnOpenInEditorClicked(object sender, RoutedEventArgs e)

@@ -111,6 +111,14 @@ public interface IGitService
     Task<GitSimpleResult> StashDropAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Pipes <paramref name="patchText"/> to <c>git apply</c> with optional
+    /// <c>--cached</c> and <c>--reverse</c> flags. Powers per-hunk Stage
+    /// (cached=true, reverse=false) and Discard (cached=false, reverse=true)
+    /// in the diff viewer.
+    /// </summary>
+    Task<GitSimpleResult> ApplyPatchAsync(GitRepositoryInfo info, string patchText, bool cached, bool reverse, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the commit history for all branches (topo-order), enriched with
     /// parent SHAs and ref decorations for graph and badge rendering.
     /// </summary>
