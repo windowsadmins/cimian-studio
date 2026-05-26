@@ -30,6 +30,8 @@ public sealed partial class RepositoryPage : Page
     private List<Manifest> _recentManifests = [];
     private GitRepositoryInfo? _gitInfo;
     private List<GitStatusEntry> _gitEntries = [];
+    private List<Package> _orphanPackages = [];
+    private List<Package> _largestPackages = [];
 
     private int _searchEpoch;
     private List<SearchHit> _currentHits = [];
@@ -74,6 +76,7 @@ public sealed partial class RepositoryPage : Page
         UpdateIndexingPill(_searchService.IsReady ? null : new SearchIndexProgress(0, 0, false));
         await LoadRecentsAsync().ConfigureAwait(true);
         await LoadGitStatusAsync(repo).ConfigureAwait(true);
+        await LoadInsightsAsync().ConfigureAwait(true);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -324,6 +327,175 @@ public sealed partial class RepositoryPage : Page
         if (App.MainWindowInstance is { } window)
         {
             window.NavigateToManifest(manifest);
+        }
+    }
+
+    private const int InsightsTopN = 5;
+
+    /// <summary>
+    /// Populates the Insights card: orphan packages (not referenced by any
+    /// manifest), largest packages by installer size, and top-N category /
+    /// developer buckets. Best-effort — failures collapse to empty hints
+    /// rather than breaking the page.
+    /// </summary>
+    private async Task LoadInsightsAsync()
+    {
+        IReadOnlyList<Package> packages;
+        IReadOnlyList<Manifest> manifests;
+        try
+        {
+            packages = await _packageService.GetAllPackagesAsync().ConfigureAwait(true);
+            manifests = await _manifestService.GetAllManifestsAsync().ConfigureAwait(true);
+        }
+        catch (Exception)
+        {
+            packages = [];
+            manifests = [];
+        }
+
+        // Orphans: package whose `name` doesn't appear in any manifest's install/
+        // update/uninstall/optional/default lists (top-level *and* nested under
+        // conditional_items). Case-insensitive to match Cimian's matching rules.
+        var referenced = CollectReferencedPackageNames(manifests);
+        _orphanPackages = [.. packages
+            .Where(p => !string.IsNullOrEmpty(p.Name) && !referenced.Contains(p.Name))
+            .OrderBy(p => p.EffectiveDisplayName, StringComparer.OrdinalIgnoreCase)
+            .Take(InsightsTopN)];
+
+        var orphanRows = _orphanPackages
+            .Select(p => string.IsNullOrEmpty(p.Version) ? p.EffectiveDisplayName : $"{p.EffectiveDisplayName}  ({p.Version})")
+            .ToList();
+        OrphansList.ItemsSource = orphanRows;
+        OrphansList.Visibility = orphanRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        OrphansEmpty.Visibility = orphanRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Largest: order by Installer.Size desc. Packages with no installer or
+        // no recorded size are excluded — surfacing zeros would only mislead.
+        _largestPackages = [.. packages
+            .Where(p => p.Installer is { Size: > 0 })
+            .OrderByDescending(p => p.Installer!.Size ?? 0)
+            .Take(InsightsTopN)];
+        var largestRows = _largestPackages
+            .Select(p => $"{p.EffectiveDisplayName}  ·  {FormatByteSize(p.Installer!.Size ?? 0)}")
+            .ToList();
+        LargestList.ItemsSource = largestRows;
+        LargestList.Visibility = largestRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        LargestEmpty.Visibility = largestRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Top categories / developers: simple group-by-then-take. (Uncategorized)
+        // and (Unknown) buckets are dropped from the leaderboards — a "top 5"
+        // that's half empty/unknown isn't useful here; the Categories and
+        // Developers tabs already surface those buckets in full.
+        var topCategories = packages
+            .Where(p => !string.IsNullOrWhiteSpace(p.Category))
+            .GroupBy(p => p.Category!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Name: g.Key, Count: g.Count()))
+            .OrderByDescending(t => t.Count)
+            .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(InsightsTopN)
+            .Select(t => $"{t.Name}  ·  {t.Count}")
+            .ToList();
+        TopCategoriesList.ItemsSource = topCategories;
+        TopCategoriesList.Visibility = topCategories.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        TopCategoriesEmpty.Visibility = topCategories.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        var topDevelopers = packages
+            .Where(p => !string.IsNullOrWhiteSpace(p.Developer))
+            .GroupBy(p => p.Developer!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => (Name: g.Key, Count: g.Count()))
+            .OrderByDescending(t => t.Count)
+            .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .Take(InsightsTopN)
+            .Select(t => $"{t.Name}  ·  {t.Count}")
+            .ToList();
+        TopDevelopersList.ItemsSource = topDevelopers;
+        TopDevelopersList.Visibility = topDevelopers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        TopDevelopersEmpty.Visibility = topDevelopers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static HashSet<string> CollectReferencedPackageNames(IReadOnlyList<Manifest> manifests)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var manifest in manifests)
+        {
+            AddAll(names, manifest.ManagedInstalls);
+            AddAll(names, manifest.ManagedUpdates);
+            AddAll(names, manifest.ManagedUninstalls);
+            AddAll(names, manifest.OptionalInstalls);
+            AddAll(names, manifest.DefaultInstalls);
+
+            if (manifest.ConditionalItems is { } conditionals)
+            {
+                WalkConditionals(names, conditionals);
+            }
+        }
+        return names;
+    }
+
+    private static void WalkConditionals(HashSet<string> sink, IEnumerable<ConditionalItem> items)
+    {
+        foreach (var item in items)
+        {
+            AddAll(sink, item.ManagedInstalls);
+            AddAll(sink, item.ManagedUpdates);
+            AddAll(sink, item.ManagedUninstalls);
+            AddAll(sink, item.OptionalInstalls);
+            if (item.NestedConditionalItems is { } nested)
+            {
+                WalkConditionals(sink, nested);
+            }
+        }
+    }
+
+    private static void AddAll(HashSet<string> sink, IEnumerable<string>? source)
+    {
+        if (source is null) return;
+        foreach (var s in source)
+        {
+            if (!string.IsNullOrWhiteSpace(s))
+            {
+                // Manifests can pin a specific version with `name-1.2.3`; strip
+                // the version suffix so it matches the pkginfo's `name` field.
+                var dash = s.IndexOf('-', StringComparison.Ordinal);
+                sink.Add(dash > 0 ? s[..dash] : s);
+            }
+        }
+    }
+
+    private static string FormatByteSize(long bytes)
+    {
+        if (bytes < 1024) return string.Create(CultureInfo.InvariantCulture, $"{bytes} B");
+        double value = bytes;
+        string[] units = ["KB", "MB", "GB", "TB"];
+        var unit = 0;
+        value /= 1024;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+        return string.Create(CultureInfo.InvariantCulture, $"{value:0.#} {units[unit]}");
+    }
+
+    private void OnOrphanClicked(object sender, ItemClickEventArgs e)
+    {
+        var view = sender as ListView;
+        var index = view?.Items.IndexOf(e.ClickedItem) ?? -1;
+        if (index < 0 || index >= _orphanPackages.Count) return;
+        if (App.MainWindowInstance is { } window)
+        {
+            window.NavigateToPackage(_orphanPackages[index]);
+        }
+    }
+
+    private void OnLargestClicked(object sender, ItemClickEventArgs e)
+    {
+        var view = sender as ListView;
+        var index = view?.Items.IndexOf(e.ClickedItem) ?? -1;
+        if (index < 0 || index >= _largestPackages.Count) return;
+        if (App.MainWindowInstance is { } window)
+        {
+            window.NavigateToPackage(_largestPackages[index]);
         }
     }
 
