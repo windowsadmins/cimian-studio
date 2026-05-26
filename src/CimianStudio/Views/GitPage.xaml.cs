@@ -428,6 +428,223 @@ public sealed partial class GitPage : Page
         {
             _suppressBranchChange = false;
         }
+
+        PopulateBranchesFlyout(branches);
+    }
+
+    /// <summary>
+    /// Builds the contents of the "Branches" DropDownButton's flyout: a list
+    /// of every local branch where each row supports click-to-checkout and a
+    /// right-click context menu with rename / delete / merge-into-current.
+    /// </summary>
+    private void PopulateBranchesFlyout(IReadOnlyList<GitBranch> branches)
+    {
+        var stack = new StackPanel { Spacing = 2, MinWidth = 280 };
+
+        if (branches.Count == 0)
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = "No branches.",
+                Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                Padding = new Thickness(8, 6, 8, 6),
+            });
+            BranchesFlyout.Content = stack;
+            return;
+        }
+
+        foreach (var b in branches)
+        {
+            var row = new Grid
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                ColumnSpacing = 8,
+                Background = new SolidColorBrush(Colors.Transparent),
+                Tag = b,
+            };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(14) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+            // Checkmark column for the current branch — keeps the row layout
+            // stable across branches whether or not they are current.
+            if (b.IsCurrent)
+            {
+                var check = new TextBlock
+                {
+                    Text = "✓",
+                    VerticalAlignment = VerticalAlignment.Center,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                };
+                Grid.SetColumn(check, 0);
+                row.Children.Add(check);
+            }
+
+            var name = new TextBlock
+            {
+                Text = b.Name,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                FontWeight = b.IsCurrent ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal,
+            };
+            Grid.SetColumn(name, 1);
+            row.Children.Add(name);
+
+            row.ContextFlyout = BuildBranchContextFlyout(b);
+            row.Tapped += async (_, _) =>
+            {
+                BranchesFlyout.Hide();
+                if (!b.IsCurrent)
+                {
+                    await CheckoutBranchFromFlyoutAsync(b.Name).ConfigureAwait(true);
+                }
+            };
+
+            stack.Children.Add(row);
+        }
+
+        BranchesFlyout.Content = stack;
+    }
+
+    private MenuFlyout BuildBranchContextFlyout(GitBranch branch)
+    {
+        var flyout = new MenuFlyout();
+
+        if (!branch.IsCurrent)
+        {
+            var checkout = new MenuFlyoutItem { Text = "Checkout" };
+            checkout.Click += async (_, _) =>
+            {
+                BranchesFlyout.Hide();
+                await CheckoutBranchFromFlyoutAsync(branch.Name).ConfigureAwait(true);
+            };
+            flyout.Items.Add(checkout);
+
+            var mergeText = string.IsNullOrEmpty(_info?.Branch)
+                ? "Merge into current branch"
+                : $"Merge into {_info.Branch}";
+            var merge = new MenuFlyoutItem { Text = mergeText };
+            merge.Click += async (_, _) =>
+            {
+                BranchesFlyout.Hide();
+                await MergeBranchAsync(branch).ConfigureAwait(true);
+            };
+            flyout.Items.Add(merge);
+
+            flyout.Items.Add(new MenuFlyoutSeparator());
+        }
+
+        var rename = new MenuFlyoutItem { Text = "Rename…" };
+        rename.Click += async (_, _) =>
+        {
+            BranchesFlyout.Hide();
+            await RenameBranchAsync(branch.Name).ConfigureAwait(true);
+        };
+        flyout.Items.Add(rename);
+
+        if (!branch.IsCurrent)
+        {
+            var delete = new MenuFlyoutItem
+            {
+                Text = "Delete…",
+                Foreground = new SolidColorBrush(RemoveColor),
+            };
+            delete.Click += async (_, _) =>
+            {
+                BranchesFlyout.Hide();
+                await DeleteBranchAsync(branch.Name).ConfigureAwait(true);
+            };
+            flyout.Items.Add(delete);
+        }
+
+        return flyout;
+    }
+
+    private async Task CheckoutBranchFromFlyoutAsync(string branchName)
+    {
+        if (_info is null) return;
+        var result = await _gitService.CheckoutBranchAsync(_info, branchName).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError("Branch switch failed", result.ErrorMessage ?? "Unknown error");
+            return;
+        }
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task MergeBranchAsync(GitBranch branch)
+    {
+        if (_info is null || string.IsNullOrEmpty(branch.TipSha)) return;
+
+        var dialog = new ContentDialog
+        {
+            Title = $"Merge {branch.Name} into {_info.Branch}?",
+            Content = $"Runs git merge {branch.Name}. If the merge needs conflict resolution you'll need to finish it manually.",
+            PrimaryButtonText = "Merge",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var result = await _gitService.MergeCommitAsync(_info, branch.TipSha).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError("Merge failed", result.Output);
+        }
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task RenameBranchAsync(string oldName)
+    {
+        if (_info is null) return;
+
+        var nameBox = new TextBox { Text = oldName, MinWidth = 320, SelectionStart = 0, SelectionLength = oldName.Length };
+        var dialog = new ContentDialog
+        {
+            Title = $"Rename branch '{oldName}'",
+            Content = nameBox,
+            PrimaryButtonText = "Rename",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var newName = nameBox.Text?.Trim() ?? string.Empty;
+        if (string.IsNullOrEmpty(newName) || string.Equals(newName, oldName, StringComparison.Ordinal)) return;
+
+        var result = await _gitService.RenameBranchAsync(_info, oldName, newName).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError("Rename failed", result.Output);
+        }
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task DeleteBranchAsync(string branchName)
+    {
+        if (_info is null) return;
+
+        var dialog = new ContentDialog
+        {
+            Title = $"Delete branch '{branchName}'?",
+            Content = "Runs git branch -d. If the branch is unmerged you can choose Force to drop it anyway (git branch -D).",
+            PrimaryButtonText = "Delete",
+            SecondaryButtonText = "Force delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        var choice = await dialog.ShowAsync();
+        if (choice == ContentDialogResult.None) return;
+
+        var force = choice == ContentDialogResult.Secondary;
+        var result = await _gitService.DeleteBranchAsync(_info, branchName, force).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError("Delete failed", result.Output);
+        }
+        await RefreshAsync().ConfigureAwait(true);
     }
 
     private void ShowNoGit(string message)
@@ -485,11 +702,14 @@ public sealed partial class GitPage : Page
     {
         // Three-column row: [checkbox | status letter | relative path]. The CheckBox
         // owns its own hit area only; clicks elsewhere in the row bubble to the
-        // ListView and trigger SelectionChanged → diff load.
+        // ListView and trigger SelectionChanged → diff load. Tag carries the row
+        // so multi-select context-menu actions can map ListView.SelectedItems
+        // back to the underlying ChangeRow list.
         var grid = new Grid
         {
             HorizontalAlignment = HorizontalAlignment.Stretch,
             ColumnSpacing = 8,
+            Tag = row,
         };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
@@ -527,7 +747,174 @@ public sealed partial class GitPage : Page
         Grid.SetColumn(path, 2);
         grid.Children.Add(path);
 
+        grid.ContextFlyout = BuildChangeRowFlyout(row);
+        grid.DoubleTapped += async (_, _) => await OpenInEditorAsync(row.Entry.AbsolutePath).ConfigureAwait(true);
+
         return grid;
+    }
+
+    /// <summary>
+    /// Builds the right-click flyout for one row on the Changes list. When the
+    /// right-clicked row is part of the current multi-selection, actions apply
+    /// to the whole selection; otherwise just to the row that was clicked.
+    /// </summary>
+    private MenuFlyout BuildChangeRowFlyout(ChangeRow row)
+    {
+        var flyout = new MenuFlyout();
+
+        var open = new MenuFlyoutItem { Text = "Open" };
+        open.Click += async (_, _) => await OpenInEditorAsync(row.Entry.AbsolutePath).ConfigureAwait(true);
+        flyout.Items.Add(open);
+
+        var showInExplorer = new MenuFlyoutItem { Text = "Show in Explorer" };
+        showInExplorer.Click += (_, _) => ShowInExplorer(row.Entry.AbsolutePath);
+        flyout.Items.Add(showInExplorer);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var copyAbs = new MenuFlyoutItem { Text = "Copy absolute path" };
+        copyAbs.Click += (_, _) => CopyChangePaths(GetActionTargets(row), absolute: true);
+        flyout.Items.Add(copyAbs);
+
+        var copyRel = new MenuFlyoutItem { Text = "Copy relative path" };
+        copyRel.Click += (_, _) => CopyChangePaths(GetActionTargets(row), absolute: false);
+        flyout.Items.Add(copyRel);
+
+        var copyName = new MenuFlyoutItem { Text = "Copy filename" };
+        copyName.Click += (_, _) => CopyChangeFilenames(GetActionTargets(row));
+        flyout.Items.Add(copyName);
+
+        flyout.Items.Add(new MenuFlyoutSeparator());
+
+        var stage = new MenuFlyoutItem { Text = "Stage" };
+        stage.Click += (_, _) => SetStageForRows(GetActionTargets(row), staged: true);
+        flyout.Items.Add(stage);
+
+        var unstage = new MenuFlyoutItem { Text = "Unstage" };
+        unstage.Click += (_, _) => SetStageForRows(GetActionTargets(row), staged: false);
+        flyout.Items.Add(unstage);
+
+        var discard = new MenuFlyoutItem
+        {
+            Text = "Discard changes…",
+            Foreground = new SolidColorBrush(RemoveColor),
+        };
+        discard.Click += async (_, _) => await DiscardRowsAsync(GetActionTargets(row)).ConfigureAwait(true);
+        flyout.Items.Add(discard);
+
+        return flyout;
+    }
+
+    /// <summary>
+    /// Right-clicking a row that's part of the current selection should act on
+    /// the whole selection; right-clicking outside the selection should act on
+    /// just that one row. ListView in Extended mode doesn't auto-include the
+    /// right-clicked row in the selection, so this branch handles both cases.
+    /// </summary>
+    private List<ChangeRow> GetActionTargets(ChangeRow rightClickedRow)
+    {
+        var selected = ChangesList.SelectedItems
+            .OfType<Grid>()
+            .Select(g => g.Tag as ChangeRow)
+            .OfType<ChangeRow>()
+            .ToList();
+        if (selected.Contains(rightClickedRow))
+        {
+            return selected;
+        }
+        return [rightClickedRow];
+    }
+
+    private static void ShowInExplorer(string absolutePath)
+    {
+        if (string.IsNullOrEmpty(absolutePath)) return;
+        try
+        {
+            // /select, with a quoted path opens Explorer focused on that file
+            // inside its parent directory.
+            var psi = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("/select,");
+            psi.ArgumentList.Add(absolutePath);
+            System.Diagnostics.Process.Start(psi);
+        }
+        catch (System.ComponentModel.Win32Exception) { }
+        catch (System.IO.IOException) { }
+    }
+
+    private static void CopyChangePaths(IReadOnlyList<ChangeRow> rows, bool absolute)
+    {
+        if (rows.Count == 0) return;
+        var text = string.Join(
+            Environment.NewLine,
+            rows.Select(r => absolute ? r.Entry.AbsolutePath : r.Entry.RelativePath));
+        WriteClipboard(text);
+    }
+
+    private static void CopyChangeFilenames(IReadOnlyList<ChangeRow> rows)
+    {
+        if (rows.Count == 0) return;
+        var text = string.Join(
+            Environment.NewLine,
+            rows.Select(r => Path.GetFileName(r.Entry.RelativePath)));
+        WriteClipboard(text);
+    }
+
+    private static void WriteClipboard(string text)
+    {
+        try
+        {
+            var pkg = new Windows.ApplicationModel.DataTransfer.DataPackage();
+            pkg.SetText(text);
+            Windows.ApplicationModel.DataTransfer.Clipboard.SetContent(pkg);
+        }
+        catch (Exception)
+        {
+            // Clipboard failures are non-fatal — keep the UI responsive.
+        }
+    }
+
+    private void SetStageForRows(IReadOnlyList<ChangeRow> rows, bool staged)
+    {
+        foreach (var r in rows)
+        {
+            r.IsSelected = staged;
+        }
+        RenderChanges();
+    }
+
+    private async Task DiscardRowsAsync(IReadOnlyList<ChangeRow> rows)
+    {
+        if (_info is null || rows.Count == 0) return;
+
+        var pluralBlurb = rows.Count == 1
+            ? rows[0].Entry.RelativePath
+            : $"{rows.Count} files";
+        var dialog = new ContentDialog
+        {
+            Title = "Discard changes?",
+            Content = $"This will permanently undo working-tree changes for {pluralBlurb}. Untracked files are deleted from disk; tracked files revert to HEAD.",
+            PrimaryButtonText = "Discard",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        var result = await dialog.ShowAsync();
+        if (result != ContentDialogResult.Primary) return;
+
+        try
+        {
+            await _gitService.DiscardFilesAsync(_info, rows.Select(r => r.Entry)).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            ShowError("Discard failed", ex.Message);
+        }
+
+        await RefreshAsync().ConfigureAwait(true);
     }
 
     private static string StatusLetter(GitFileStatus status) => status switch
@@ -566,6 +953,217 @@ public sealed partial class GitPage : Page
         RenderChanges();
     }
 
+    // ── Stash ─────────────────────────────────────────────────────────────────
+
+    private async void OnStashButtonOpening(object sender, object e)
+    {
+        // The flyout is wired to refresh its contents every time it opens, so
+        // newly-popped stashes drop off the list and a fresh "git stash push"
+        // immediately appears.
+        if (_info is null)
+        {
+            StashFlyout.Content = new TextBlock
+            {
+                Text = "No git repository.",
+                Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+            };
+            return;
+        }
+
+        IReadOnlyList<GitStashEntry> stashes;
+        try
+        {
+            stashes = await _gitService.GetStashesAsync(_info).ConfigureAwait(true);
+        }
+        catch
+        {
+            stashes = [];
+        }
+        PopulateStashFlyout(stashes);
+    }
+
+    private void PopulateStashFlyout(IReadOnlyList<GitStashEntry> stashes)
+    {
+        var root = new StackPanel { Spacing = 6, MinWidth = 360 };
+
+        var pushButton = new Button
+        {
+            Content = "Stash current changes…",
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+        };
+        pushButton.Click += async (_, _) =>
+        {
+            StashFlyout.Hide();
+            await StashCurrentAsync().ConfigureAwait(true);
+        };
+        root.Children.Add(pushButton);
+
+        if (stashes.Count == 0)
+        {
+            root.Children.Add(new TextBlock
+            {
+                Text = "No stashes.",
+                Foreground = (Brush)Application.Current.Resources["TextFillColorTertiaryBrush"],
+                Padding = new Thickness(0, 4, 0, 0),
+            });
+            StashFlyout.Content = root;
+            return;
+        }
+
+        root.Children.Add(new TextBlock
+        {
+            Text = $"Stashes ({stashes.Count})",
+            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+            Margin = new Thickness(0, 4, 0, 2),
+        });
+
+        foreach (var stash in stashes)
+        {
+            var row = new Grid
+            {
+                Padding = new Thickness(6),
+                ColumnSpacing = 8,
+                Tag = stash,
+            };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var info = new StackPanel { Spacing = 1 };
+            info.Children.Add(new TextBlock
+            {
+                Text = stash.Subject,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Style = (Style)Application.Current.Resources["BodyStrongTextBlockStyle"],
+            });
+            info.Children.Add(new TextBlock
+            {
+                Text = $"{stash.Reference}  ·  {stash.Branch}  ·  {stash.When.LocalDateTime:yyyy-MM-dd HH:mm}",
+                Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            });
+            Grid.SetColumn(info, 0);
+            row.Children.Add(info);
+
+            var actionButton = new DropDownButton
+            {
+                Content = "⋯",
+                Padding = new Thickness(8, 0, 8, 0),
+            };
+            var menu = new MenuFlyout();
+
+            var apply = new MenuFlyoutItem { Text = "Apply (keep stash)" };
+            apply.Click += async (_, _) =>
+            {
+                StashFlyout.Hide();
+                await StashOpAsync(stash.Reference, (i, r) => i.StashApplyAsync(_info!, r), "Apply stash").ConfigureAwait(true);
+            };
+            menu.Items.Add(apply);
+
+            var pop = new MenuFlyoutItem { Text = "Pop (apply and drop)" };
+            pop.Click += async (_, _) =>
+            {
+                StashFlyout.Hide();
+                await StashOpAsync(stash.Reference, (i, r) => i.StashPopAsync(_info!, r), "Pop stash").ConfigureAwait(true);
+            };
+            menu.Items.Add(pop);
+
+            menu.Items.Add(new MenuFlyoutSeparator());
+
+            var drop = new MenuFlyoutItem
+            {
+                Text = "Drop…",
+                Foreground = new SolidColorBrush(RemoveColor),
+            };
+            drop.Click += async (_, _) =>
+            {
+                StashFlyout.Hide();
+                await DropStashAsync(stash).ConfigureAwait(true);
+            };
+            menu.Items.Add(drop);
+
+            actionButton.Flyout = menu;
+            Grid.SetColumn(actionButton, 1);
+            row.Children.Add(actionButton);
+
+            root.Children.Add(row);
+        }
+
+        StashFlyout.Content = root;
+    }
+
+    private async Task StashCurrentAsync()
+    {
+        if (_info is null) return;
+
+        var messageBox = new TextBox
+        {
+            PlaceholderText = "Optional message (leave blank for git's WIP-on-branch default)",
+            MinWidth = 360,
+        };
+        var dialog = new ContentDialog
+        {
+            Title = "Stash current changes",
+            Content = messageBox,
+            PrimaryButtonText = "Stash",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        var msg = string.IsNullOrWhiteSpace(messageBox.Text) ? null : messageBox.Text.Trim();
+        var result = await _gitService.StashAsync(_info, msg).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError("Stash failed", result.Output);
+        }
+        else
+        {
+            ResultBar.Severity = InfoBarSeverity.Success;
+            ResultBar.Title = "Stashed working tree";
+            ResultBar.Message = result.Output;
+            ResultBar.IsOpen = true;
+        }
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task StashOpAsync(string reference, Func<IGitService, string, Task<GitSimpleResult>> op, string title)
+    {
+        if (_info is null) return;
+        var result = await op(_gitService, reference).ConfigureAwait(true);
+        if (!result.Success)
+        {
+            ShowError($"{title} failed", result.Output);
+        }
+        else
+        {
+            ResultBar.Severity = InfoBarSeverity.Success;
+            ResultBar.Title = title;
+            ResultBar.Message = result.Output;
+            ResultBar.IsOpen = true;
+        }
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task DropStashAsync(GitStashEntry stash)
+    {
+        if (_info is null) return;
+        var dialog = new ContentDialog
+        {
+            Title = $"Drop {stash.Reference}?",
+            Content = $"This permanently discards the stash:\n\n{stash.Subject}",
+            PrimaryButtonText = "Drop",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        await StashOpAsync(stash.Reference, (i, r) => i.StashDropAsync(_info, r), "Drop stash").ConfigureAwait(true);
+    }
+
     private async void OnRefreshClicked(object sender, RoutedEventArgs e)
     {
         await RefreshAsync().ConfigureAwait(true);
@@ -596,12 +1194,17 @@ public sealed partial class GitPage : Page
         }
     }
 
+    private List<HistoryRow> _allHistoryRows = [];
+    private int _historyLimit = 200;
+    private const int HistoryPageSize = 200;
+
     private async Task LoadHistoryAsync()
     {
         if (_info is null)
         {
             HistoryList.ItemsSource = null;
             HistoryEmpty.Visibility = Visibility.Visible;
+            LoadMoreCommitsButton.Visibility = Visibility.Collapsed;
             return;
         }
 
@@ -609,17 +1212,80 @@ public sealed partial class GitPage : Page
         HistoryEmpty.Visibility = Visibility.Collapsed;
         try
         {
-            var commits = await _gitService.GetHistoryAsync(_info, 200).ConfigureAwait(true);
+            var commits = await _gitService.GetHistoryAsync(_info, _historyLimit).ConfigureAwait(true);
             var laneRows = LaneLayout.Compute(commits);
-            var rows = commits.Zip(laneRows, (c, lr) => new HistoryRow(c, lr)).ToList();
-            HistoryList.ItemsSource = rows;
-            HistoryEmpty.Visibility = rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            _allHistoryRows = commits.Zip(laneRows, (c, lr) => new HistoryRow(c, lr)).ToList();
+
+            ApplyHistoryFilter();
+
+            // The history walker honours --max-count, so when it returns
+            // exactly the requested limit there may still be older commits.
+            // Show "Load more" until we hit a short page (real end of history).
+            LoadMoreCommitsButton.Visibility = _allHistoryRows.Count >= _historyLimit
+                ? Visibility.Visible
+                : Visibility.Collapsed;
             _historyLoaded = true;
         }
         finally
         {
             HistoryLoading.IsActive = false;
         }
+    }
+
+    /// <summary>
+    /// Re-applies the search box's text against the cached <see cref="_allHistoryRows"/>
+    /// and rebinds the visible list. Filter is case-insensitive across SHA prefix,
+    /// subject, author name/email, and any decorating ref names.
+    /// </summary>
+    private void ApplyHistoryFilter()
+    {
+        var needle = HistorySearchBox?.Text?.Trim() ?? string.Empty;
+        IReadOnlyList<HistoryRow> visible;
+        if (string.IsNullOrEmpty(needle))
+        {
+            visible = _allHistoryRows;
+        }
+        else
+        {
+            visible = _allHistoryRows.Where(r => MatchesHistoryFilter(r, needle)).ToList();
+        }
+        HistoryList.ItemsSource = visible;
+        HistoryEmpty.Visibility = visible.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static bool MatchesHistoryFilter(HistoryRow row, string needle)
+    {
+        if (Contains(row.Sha, needle)) return true;
+        if (Contains(row.FullSha, needle)) return true;
+        if (Contains(row.Subject, needle)) return true;
+        if (Contains(row.AuthorName, needle)) return true;
+        if (row.Refs is { Count: > 0 } refs)
+        {
+            foreach (var r in refs)
+            {
+                if (Contains(r.Label, needle)) return true;
+            }
+        }
+        return false;
+
+        static bool Contains(string? haystack, string needle)
+            => !string.IsNullOrEmpty(haystack)
+            && haystack.Contains(needle, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private void OnHistorySearchChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_historyLoaded) return;
+        ApplyHistoryFilter();
+    }
+
+    private async void OnLoadMoreCommitsClicked(object sender, RoutedEventArgs e)
+    {
+        if (_info is null) return;
+        _historyLimit += HistoryPageSize;
+        // Reset so LoadHistoryAsync re-fetches with the larger limit.
+        _historyLoaded = false;
+        await LoadHistoryAsync().ConfigureAwait(true);
     }
 
     // ── Hooks pivot ───────────────────────────────────────────────────────────
@@ -1218,12 +1884,20 @@ public sealed partial class GitPage : Page
     {
         // Selection is the diff target. We keep the checkbox state separate so the
         // user can select a row to view it without including it in the commit.
-        if (sender is not ListView list || list.SelectedIndex < 0 || list.SelectedIndex >= _rows.Count)
+        // With Extended SelectionMode the diff shows the *last* selected row's
+        // diff (matches Tower / VS Code where the focused row drives the diff).
+        if (sender is not ListView list || list.SelectedItems.Count == 0)
         {
+            _selectedRow = null;
+            ClearDiff();
             return;
         }
-        _selectedRow = _rows[list.SelectedIndex];
-        _ = RenderDiffForSelectionAsync();
+
+        if (list.SelectedItems[^1] is Grid grid && grid.Tag is ChangeRow row)
+        {
+            _selectedRow = row;
+            _ = RenderDiffForSelectionAsync();
+        }
     }
 
     private void OnChangeItemClicked(object sender, ItemClickEventArgs e)
@@ -1534,7 +2208,83 @@ public sealed partial class GitPage : Page
         ResultBar.Severity = InfoBarSeverity.Error;
         ResultBar.Title = title;
         ResultBar.Message = string.IsNullOrWhiteSpace(output) ? "(no output)" : output;
+        // When the error trace looks like a stale .git/index.lock, surface a
+        // recovery action directly on the InfoBar so the user doesn't have to
+        // dig into the filesystem to unblock themselves.
+        ResultBar.ActionButton = ContainsIndexLockSignature(output)
+            ? BuildIndexLockRecoveryButton()
+            : null;
         ResultBar.IsOpen = true;
+    }
+
+    private static bool ContainsIndexLockSignature(string output)
+    {
+        if (string.IsNullOrEmpty(output)) return false;
+        return output.Contains("index.lock", StringComparison.OrdinalIgnoreCase)
+            || output.Contains("another git process", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private Button BuildIndexLockRecoveryButton()
+    {
+        var btn = new Button { Content = "Recover (delete index.lock)" };
+        btn.Click += async (_, _) => await DeleteIndexLockAsync().ConfigureAwait(true);
+        return btn;
+    }
+
+    /// <summary>
+    /// Confirms (with a stale-lock age hint) then deletes <c>.git/index.lock</c>.
+    /// We don't auto-retry the failed operation — the user re-issues commit /
+    /// push / etc. manually once the lock is gone, which is safer than blindly
+    /// re-running a half-completed write.
+    /// </summary>
+    private async Task DeleteIndexLockAsync()
+    {
+        if (_info is null) return;
+        var lockPath = Path.Combine(_info.GitRoot, ".git", "index.lock");
+
+        var ageHint = string.Empty;
+        try
+        {
+            if (File.Exists(lockPath))
+            {
+                var age = DateTime.UtcNow - File.GetLastWriteTimeUtc(lockPath);
+                ageHint = $"Lock file age: {(int)age.TotalSeconds}s. ";
+            }
+            else
+            {
+                ResultBar.Severity = InfoBarSeverity.Success;
+                ResultBar.Title = "No lock file present";
+                ResultBar.Message = "Whatever held the lock has released it. Try the operation again.";
+                ResultBar.ActionButton = null;
+                return;
+            }
+        }
+        catch (IOException) { }
+
+        var dialog = new ContentDialog
+        {
+            Title = "Delete .git/index.lock?",
+            Content = ageHint
+                + "Only do this if no other git process is running against this repo. If git is mid-write, deleting the lock can corrupt the index.",
+            PrimaryButtonText = "Delete",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Content.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+
+        try
+        {
+            File.Delete(lockPath);
+            ResultBar.Severity = InfoBarSeverity.Success;
+            ResultBar.Title = "Lock file removed";
+            ResultBar.Message = "Try the operation again.";
+            ResultBar.ActionButton = null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            ShowError("Couldn't delete lock", ex.Message);
+        }
     }
 
     // -------- keyboard shortcuts --------

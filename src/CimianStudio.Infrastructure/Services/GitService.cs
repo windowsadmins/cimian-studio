@@ -41,6 +41,68 @@ public sealed class GitService : IGitService
         return Task.Run(() => StageCore(info, paths), cancellationToken);
     }
 
+    public Task<GitSimpleResult> DiscardFilesAsync(GitRepositoryInfo info, IEnumerable<GitStatusEntry> entries, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentNullException.ThrowIfNull(entries);
+        var list = entries.ToList();
+        return Task.Run(() =>
+        {
+            var output = new StringBuilder();
+            var anyFailed = false;
+
+            // Bucket entries into "untracked → delete from disk" and
+            // "tracked → git restore". Issuing them in two batches keeps the
+            // process spawn count down for repos with lots of dirty files.
+            var untracked = new List<string>();
+            var tracked = new List<string>();
+            foreach (var entry in list)
+            {
+                if (string.IsNullOrEmpty(entry.RelativePath)) continue;
+                if (entry.Status == GitFileStatus.Untracked)
+                {
+                    untracked.Add(entry.RelativePath);
+                }
+                else
+                {
+                    tracked.Add(entry.RelativePath);
+                }
+            }
+
+            foreach (var rel in untracked)
+            {
+                try
+                {
+                    var abs = Path.Combine(info.GitRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+                    if (File.Exists(abs))
+                    {
+                        File.Delete(abs);
+                        output.AppendLine($"deleted {rel}");
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    anyFailed = true;
+                    output.AppendLine($"failed to delete {rel}: {ex.Message}");
+                }
+            }
+
+            if (tracked.Count > 0)
+            {
+                // git restore --staged --worktree -- <paths…>
+                // Resets both the index and the working tree to HEAD for the
+                // given paths. Single git invocation covers any number of files.
+                var args = new List<string> { "restore", "--staged", "--worktree", "--" };
+                args.AddRange(tracked);
+                var (code, out_) = RunGit(info.GitRoot, args);
+                if (!string.IsNullOrEmpty(out_)) output.AppendLine(out_);
+                if (code != 0) anyFailed = true;
+            }
+
+            return new GitSimpleResult(!anyFailed, output.ToString().TrimEnd());
+        }, cancellationToken);
+    }
+
     public Task<GitCommitResult> CommitAsync(GitRepositoryInfo info, string subject, string? body, bool runHooks, bool amend = false, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);
@@ -126,6 +188,146 @@ public sealed class GitService : IGitService
         ArgumentNullException.ThrowIfNull(info);
         ArgumentException.ThrowIfNullOrWhiteSpace(branchName);
         return Task.Run(() => CheckoutBranchCore(info, branchName), cancellationToken);
+    }
+
+    public Task<GitSimpleResult> DeleteBranchAsync(GitRepositoryInfo info, string branchName, bool force = false, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(branchName);
+        return Task.Run(() =>
+        {
+            // -d refuses unmerged branches; -D drops them anyway. The caller
+            // confirms before passing force=true, so we trust the choice.
+            var flag = force ? "-D" : "-d";
+            var (code, output) = RunGit(info.GitRoot, ["branch", flag, branchName]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> RenameBranchAsync(GitRepositoryInfo info, string oldName, string newName, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(oldName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["branch", "-m", oldName, newName]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashAsync(GitRepositoryInfo info, string? message = null, bool includeUntracked = true, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        return Task.Run(() =>
+        {
+            var args = new List<string> { "stash", "push" };
+            if (includeUntracked) args.Add("--include-untracked");
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                args.Add("-m");
+                args.Add(message);
+            }
+            var (code, output) = RunGit(info.GitRoot, args);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<GitStashEntry>> GetStashesAsync(GitRepositoryInfo info, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        return Task.Run<IReadOnlyList<GitStashEntry>>(() =>
+        {
+            // %gd → stash@{N} reference; %ai → ISO timestamp; %gs → stash subject.
+            // Tab-separated so we can split with a single delimiter; subjects never
+            // contain raw tabs (git collapses whitespace in the reflog subject).
+            var (code, output) = RunGit(info.GitRoot,
+                ["stash", "list", "--pretty=format:%gd\t%ai\t%gs"]);
+            if (code != 0 || string.IsNullOrWhiteSpace(output))
+            {
+                return [];
+            }
+
+            var entries = new List<GitStashEntry>();
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t', 3);
+                if (parts.Length < 3) continue;
+
+                var reference = parts[0].Trim();
+                var when = DateTimeOffset.TryParse(parts[1].Trim(), CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed)
+                    ? parsed
+                    : DateTimeOffset.MinValue;
+                var subject = parts[2].Trim();
+
+                // Subject is conventionally "WIP on <branch>: <sha> <commit-subject>"
+                // or "On <branch>: <message>" when the user supplied -m.
+                var branch = ExtractBranchFromStashSubject(subject);
+                entries.Add(new GitStashEntry(reference, branch, subject, when));
+            }
+            return entries;
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Pulls the branch name out of git's stash subject format. Falls back to
+    /// empty string when the subject is in an unexpected shape.
+    /// </summary>
+    private static string ExtractBranchFromStashSubject(string subject)
+    {
+        // Patterns:
+        //   "WIP on <branch>: <sha> <subject>"
+        //   "On <branch>: <user-message>"
+        const string wipPrefix = "WIP on ";
+        const string onPrefix = "On ";
+        string remainder;
+        if (subject.StartsWith(wipPrefix, StringComparison.Ordinal))
+        {
+            remainder = subject[wipPrefix.Length..];
+        }
+        else if (subject.StartsWith(onPrefix, StringComparison.Ordinal))
+        {
+            remainder = subject[onPrefix.Length..];
+        }
+        else
+        {
+            return string.Empty;
+        }
+        var colon = remainder.IndexOf(':', StringComparison.Ordinal);
+        return colon > 0 ? remainder[..colon] : remainder;
+    }
+
+    public Task<GitSimpleResult> StashApplyAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "apply", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashPopAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "pop", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashDropAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "drop", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
     }
 
     public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default)
