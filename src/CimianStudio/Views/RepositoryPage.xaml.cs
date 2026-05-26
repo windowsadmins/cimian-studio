@@ -924,6 +924,13 @@ public sealed partial class RepositoryPage : Page
         else
         {
             valueText.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = numberPart });
+            // Thin space (U+2009) between number and unit. Same FontSize as
+            // the unit so the gap doesn't render at the larger number size.
+            valueText.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+            {
+                Text = " ",
+                FontSize = 14,
+            });
             valueText.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
             {
                 Text = unitPart,
