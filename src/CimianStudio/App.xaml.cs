@@ -55,6 +55,7 @@ public partial class App : Application
                 services.AddTransient<CatalogsViewModel>();
                 services.AddTransient<IconsViewModel>();
                 services.AddTransient<CategoriesViewModel>();
+                services.AddTransient<DevelopersViewModel>();
                 services.AddTransient<Views.Import.ImportViewModel>();
                 services.AddTransient<BuildViewModel>();
 
@@ -67,6 +68,7 @@ public partial class App : Application
                 services.AddTransient<CatalogsPage>();
                 services.AddTransient<IconsPage>();
                 services.AddTransient<CategoriesPage>();
+                services.AddTransient<DevelopersPage>();
                 // GitPage + ImportPage are singletons so cross-tab handoffs
                 // (Import → Git, Packages drop → Import) operate on the *visible*
                 // page instance instead of a fresh transient that isn't attached

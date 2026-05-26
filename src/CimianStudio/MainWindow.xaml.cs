@@ -372,6 +372,13 @@ public sealed partial class MainWindow : Window
         SwapNavItemIcon(NavCategories,
             "M20.59,13.41 L13.42,20.58 A2,2 0 0 1 10.59,20.58 L2,12 V2 H12 L20.59,10.59 " +
             "A2,2 0 0 1 20.59,13.41 Z M7,7 H7.01");
+
+        // Stroked Lucide "users" Path for NavDevelopers.
+        SwapNavItemIcon(NavDevelopers,
+            "M16,21 V19 A4,4 0 0 0 12,15 H6 A4,4 0 0 0 2,19 V21 " +
+            "M9,11 A4,4 0 1 0 9,3 A4,4 0 1 0 9,11 Z " +
+            "M22,21 V19 A4,4 0 0 0 19,15.13 " +
+            "M16,3.13 A4,4 0 0 1 16,10.87");
     }
 
     /// <summary>
@@ -516,6 +523,7 @@ public sealed partial class MainWindow : Window
         NavCatalogs.IsEnabled = enabled;
         NavIcons.IsEnabled = enabled;
         NavCategories.IsEnabled = enabled;
+        NavDevelopers.IsEnabled = enabled;
         NavGit.IsEnabled = enabled;
         // Build operates on cimipkg projects and doesn't need an open repository,
         // so its enablement is governed by the projects-folder setting (visibility),
@@ -533,6 +541,7 @@ public sealed partial class MainWindow : Window
             "catalogs" => NavCatalogs,
             "icons" => NavIcons,
             "categories" => NavCategories,
+            "developers" => NavDevelopers,
             "git" => NavGit,
             "build" => NavBuild,
             "settings" => NavSettings,
@@ -551,6 +560,7 @@ public sealed partial class MainWindow : Window
             "catalogs" => App.Resolve<CatalogsPage>(),
             "icons" => App.Resolve<IconsPage>(),
             "categories" => App.Resolve<CategoriesPage>(),
+            "developers" => App.Resolve<DevelopersPage>(),
             "import" => App.Resolve<Views.Import.ImportPage>(),
             "git" => App.Resolve<GitPage>(),
             "build" => App.Resolve<Views.Build.BuildPage>(),
