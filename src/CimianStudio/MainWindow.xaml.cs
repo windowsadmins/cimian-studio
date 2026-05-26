@@ -352,31 +352,51 @@ public sealed partial class MainWindow : Window
             };
         }
 
+        // Replace NavIcons' icon with a stroked Lucide image Path so its stroke
+        // weight matches the rest of the rail at compact size.
+        SwapNavItemIcon(NavIcons,
+            "M5,3 H19 A2,2 0 0 1 21,5 V19 A2,2 0 0 1 19,21 H5 A2,2 0 0 1 3,19 V5 A2,2 0 0 1 5,3 Z " +
+            "M7,9 A2,2 0 1 0 11,9 A2,2 0 1 0 7,9 Z " +
+            "M21,15 L17.914,11.914 A2,2 0 0 0 15.086,11.914 L6,21");
+
         // Replace NavGit's icon with a stroked Path matching the title bar's
         // GitIndicator exactly. The Lucide font's git-branch glyph rendered
         // visibly thinner than the title bar's 2px-stroked Path at rail size;
         // by swapping the IconBox's Child for the same Path the title bar uses,
-        // both visuals stay in lockstep. NavigationViewItemPresenter's IconBox
-        // is a Viewbox once the template applies.
-        var iconBox = FindDescendant<Viewbox>(NavGit, "IconBox");
-        if (iconBox is not null)
+        // both visuals stay in lockstep.
+        SwapNavItemIcon(NavGit,
+            "M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z " +
+            "M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18");
+    }
+
+    /// <summary>
+    /// Replaces the IconBox child of <paramref name="item"/> with a stroked
+    /// Lucide-style <see cref="Microsoft.UI.Xaml.Shapes.Path"/> bound to the
+    /// item's Foreground so it picks up nav-state theming for free.
+    /// NavigationViewItemPresenter's IconBox is a Viewbox once the template
+    /// applies; bail silently if we get called before then.
+    /// </summary>
+    private static void SwapNavItemIcon(NavigationViewItem item, string pathData)
+    {
+        var iconBox = FindDescendant<Viewbox>(item, "IconBox");
+        if (iconBox is null)
         {
-            const string pathXaml =
-                "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
-                "Width=\"24\" Height=\"24\" " +
-                "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
-                "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
-                "Fill=\"Transparent\" " +
-                "Data=\"M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z " +
-                "M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18\" />";
-            var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
-            path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
-            {
-                Source = NavGit,
-                Path = new PropertyPath("Foreground"),
-            });
-            iconBox.Child = path;
+            return;
         }
+
+        var pathXaml =
+            "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "Width=\"24\" Height=\"24\" " +
+            "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
+            "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
+            "Fill=\"Transparent\" Data=\"" + pathData + "\" />";
+        var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
+        path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
+        {
+            Source = item,
+            Path = new PropertyPath("Foreground"),
+        });
+        iconBox.Child = path;
     }
 
     private static T? FindDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
@@ -489,6 +509,7 @@ public sealed partial class MainWindow : Window
         NavImport.IsEnabled = enabled;
         NavManifests.IsEnabled = enabled;
         NavCatalogs.IsEnabled = enabled;
+        NavIcons.IsEnabled = enabled;
         NavGit.IsEnabled = enabled;
         // Build operates on cimipkg projects and doesn't need an open repository,
         // so its enablement is governed by the projects-folder setting (visibility),
@@ -504,6 +525,7 @@ public sealed partial class MainWindow : Window
             "import" => NavImport,
             "manifests" => NavManifests,
             "catalogs" => NavCatalogs,
+            "icons" => NavIcons,
             "git" => NavGit,
             "build" => NavBuild,
             "settings" => NavSettings,
@@ -520,6 +542,7 @@ public sealed partial class MainWindow : Window
             "packages" => App.Resolve<PackagesPage>(),
             "manifests" => App.Resolve<ManifestsPage>(),
             "catalogs" => App.Resolve<CatalogsPage>(),
+            "icons" => App.Resolve<IconsPage>(),
             "import" => App.Resolve<Views.Import.ImportPage>(),
             "git" => App.Resolve<GitPage>(),
             "build" => App.Resolve<Views.Build.BuildPage>(),
