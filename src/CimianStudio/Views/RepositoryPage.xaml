@@ -25,18 +25,14 @@
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />  <!-- 0: header (name+path) + search -->
                 <RowDefinition Height="Auto" />  <!-- 1: search results -->
-                <RowDefinition Height="Auto" />  <!-- 2: Repository section header -->
-                <RowDefinition Height="Auto" />  <!-- 3: stats row A -->
-                <RowDefinition Height="Auto" />  <!-- 4: stats row B -->
-                <RowDefinition Height="Auto" />  <!-- 5: Health Check section header -->
-                <RowDefinition Height="Auto" />  <!-- 6: health row -->
-                <RowDefinition Height="Auto" />  <!-- 7: Recent commits -->
-                <RowDefinition Height="Auto" />  <!-- 8: recents (pkginfo / manifests) -->
-                <RowDefinition Height="Auto" />  <!-- 9: orphans / largest -->
-                <RowDefinition Height="Auto" />  <!-- 10: top devs / top cats -->
-                <RowDefinition Height="Auto" />  <!-- 11: git status -->
-                <RowDefinition Height="Auto" />  <!-- 12: validate button + bar -->
-                <RowDefinition Height="Auto" />  <!-- 13: validation details -->
+                <RowDefinition Height="Auto" />  <!-- 2: top section (Repository | Health+Activity) -->
+                <RowDefinition Height="Auto" />  <!-- 3: Recent commits -->
+                <RowDefinition Height="Auto" />  <!-- 4: recents (pkginfo / manifests) -->
+                <RowDefinition Height="Auto" />  <!-- 5: orphans / largest -->
+                <RowDefinition Height="Auto" />  <!-- 6: top devs / top cats -->
+                <RowDefinition Height="Auto" />  <!-- 7: git status -->
+                <RowDefinition Height="Auto" />  <!-- 8: validate button + bar -->
+                <RowDefinition Height="Auto" />  <!-- 9: validation details -->
             </Grid.RowDefinitions>
 
             <!-- Row 0: title + path on left, search on right -->
@@ -109,57 +105,93 @@
                 </StackPanel>
             </Border>
 
-            <!-- Row 2: Repository section header -->
-            <StackPanel Grid.Row="2" Orientation="Horizontal" Spacing="8">
-                <Viewbox Width="18" Height="18" VerticalAlignment="Center">
-                    <!-- Lucide package -->
-                    <Path Width="24" Height="24"
-                          Style="{StaticResource LucidePath}"
-                          Data="M16.5,9.4 L7.55,4.24 M21,16 V8 A2,2 0 0 0 20,6.27 L13,2.27 A2,2 0 0 0 11,2.27 L4,6.27 A2,2 0 0 0 3,8 V16 A2,2 0 0 0 4,17.73 L11,21.73 A2,2 0 0 0 13,21.73 L20,17.73 A2,2 0 0 0 21,16 Z M3.27,6.96 L12,12.01 L20.73,6.96 M12,22.08 V12" />
-                </Viewbox>
-                <TextBlock Text="Repository" Style="{StaticResource SubtitleTextBlockStyle}" />
-            </StackPanel>
+            <!-- Row 2: top section — Repository on the left, Health Check & Activity on the right.
+                 Outer grid is a 50/50 split (Width="*" / "*"), and each metric row is a 5-column
+                 *uniform* grid so the cards auto-resize to fill the available width and every card
+                 across both halves ends up the same size. Rows never wrap — they just shrink.
+                 At narrow window widths the VisualStateManager block below promotes the right
+                 column to a second row underneath the left column instead of letting the cards
+                 squeeze to the point of needing to truncate with `...`. -->
+            <!-- The two-column / stacked layout swap is driven from code-behind
+                 via Page.SizeChanged — AdaptiveTrigger inside a sub-Grid like
+                 this doesn't fire reliably in WinUI 3 desktop apps; the Page
+                 width-trigger is more dependable. -->
+            <Grid x:Name="TopSection" Grid.Row="2" ColumnSpacing="20" RowSpacing="14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
 
-            <!-- Row 3: stats row A — Packages, Manifests, Catalogs, Categories, Developers -->
-            <ItemsControl Grid.Row="3" x:Name="StatsRowA">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="12" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
+                <!-- Left: Repository -->
+                <StackPanel x:Name="LeftSection" Grid.Row="0" Grid.Column="0" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Viewbox Width="18" Height="18" VerticalAlignment="Center">
+                            <!-- Lucide package -->
+                            <Path Width="24" Height="24"
+                                  Style="{StaticResource LucidePath}"
+                                  Data="M16.5,9.4 L7.55,4.24 M21,16 V8 A2,2 0 0 0 20,6.27 L13,2.27 A2,2 0 0 0 11,2.27 L4,6.27 A2,2 0 0 0 3,8 V16 A2,2 0 0 0 4,17.73 L11,21.73 A2,2 0 0 0 13,21.73 L20,17.73 A2,2 0 0 0 21,16 Z M3.27,6.96 L12,12.01 L20.73,6.96 M12,22.08 V12" />
+                        </Viewbox>
+                        <TextBlock Text="Repository" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    </StackPanel>
+                    <Grid x:Name="StatsRowA" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                    <Grid x:Name="StatsRowB" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </StackPanel>
 
-            <!-- Row 4: stats row B — Repo size, Orphan packages, Largest single, Uncommitted, Recent commits -->
-            <ItemsControl Grid.Row="4" x:Name="StatsRowB">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="12" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
+                <!-- Right: Health Check & Activity. Grid.Row / Grid.Column are
+                     remapped by the VisualStateManager above when window width drops. -->
+                <StackPanel x:Name="RightSection" Grid.Row="0" Grid.Column="1" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Viewbox Width="18" Height="18" VerticalAlignment="Center">
+                            <!-- Lucide activity (heart-rate line) -->
+                            <Path Width="24" Height="24"
+                                  Style="{StaticResource LucidePath}"
+                                  Data="M22,12 H18 L15,21 L9,3 L6,12 H2" />
+                        </Viewbox>
+                        <TextBlock Text="Health Check &amp; Activity" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    </StackPanel>
+                    <Grid x:Name="HealthRow" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                    <Grid x:Name="ActivityRow" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </StackPanel>
+            </Grid>
 
-            <!-- Row 5: Health Check section header -->
-            <StackPanel Grid.Row="5" Orientation="Horizontal" Spacing="8">
-                <Viewbox Width="18" Height="18" VerticalAlignment="Center">
-                    <!-- Lucide activity (heart-rate line) -->
-                    <Path Width="24" Height="24"
-                          Style="{StaticResource LucidePath}"
-                          Data="M22,12 H18 L15,21 L9,3 L6,12 H2" />
-                </Viewbox>
-                <TextBlock Text="Health Check" Style="{StaticResource SubtitleTextBlockStyle}" />
-            </StackPanel>
-
-            <!-- Row 6: health row — No description, No category, No developer, No installer, Empty manifests -->
-            <ItemsControl Grid.Row="6" x:Name="HealthRow">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="12" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
-
-            <!-- Row 7: Recent commits -->
-            <Border Grid.Row="7"
+            <!-- Row 9: Recent commits -->
+            <Border Grid.Row="3"
                     x:Name="RecentCommitsCard"
                     Style="{StaticResource CardStyle}"
                     Shadow="{StaticResource CardShadow}"
@@ -186,8 +218,8 @@
                 </StackPanel>
             </Border>
 
-            <!-- Row 8: recents (packages / manifests) — compact 2-col -->
-            <Grid Grid.Row="8" ColumnSpacing="12">
+            <!-- Row 4: recents (packages / manifests) — compact 2-col -->
+            <Grid Grid.Row="4" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -238,8 +270,8 @@
                 </Border>
             </Grid>
 
-            <!-- Row 9: orphans / largest -->
-            <Grid Grid.Row="9" ColumnSpacing="12">
+            <!-- Row 5: orphans / largest -->
+            <Grid Grid.Row="5" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -303,8 +335,8 @@
                 </Border>
             </Grid>
 
-            <!-- Row 10: top devs / top cats -->
-            <Grid Grid.Row="10" ColumnSpacing="12">
+            <!-- Row 6: top devs / top cats -->
+            <Grid Grid.Row="6" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
@@ -351,8 +383,8 @@
                 </Border>
             </Grid>
 
-            <!-- Row 11: git status (kept from before) -->
-            <Border Grid.Row="11"
+            <!-- Row 7: git status (kept from before) -->
+            <Border Grid.Row="7"
                     x:Name="GitStatusCard"
                     Visibility="Collapsed"
                     Style="{StaticResource CardStyle}"
@@ -378,8 +410,8 @@
                 </Grid>
             </Border>
 
-            <!-- Row 12: validate -->
-            <Grid Grid.Row="12" ColumnSpacing="12">
+            <!-- Row 8: validate -->
+            <Grid Grid.Row="8" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
@@ -393,8 +425,8 @@
                          IsOpen="False" />
             </Grid>
 
-            <!-- Row 13: validation details -->
-            <ScrollViewer Grid.Row="13" MaxHeight="180">
+            <!-- Row 9: validation details -->
+            <ScrollViewer Grid.Row="9" MaxHeight="180">
                 <ItemsControl x:Name="ValidationDetails">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="x:String">

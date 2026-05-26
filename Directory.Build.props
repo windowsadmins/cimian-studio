@@ -21,7 +21,7 @@
   <PropertyGroup>
     <Authors>Windows Admins Community</Authors>
     <Company>windowsadmins</Company>
-    <Product>CimianStudio</Product>
+    <Product>Cimian Studio</Product>
     <Copyright>Copyright (c) 2025 Windows Admins Community</Copyright>
     <RepositoryUrl>https://github.com/windowsadmins/cimianstudio</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
