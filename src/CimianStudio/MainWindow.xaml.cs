@@ -416,6 +416,33 @@ public sealed partial class MainWindow : Window
         return null;
     }
 
+    /// <summary>
+    /// Switches the rail from <c>LeftCompact</c> (icons only) to <c>Left</c>
+    /// (full inline pane) when the user clicks the toggle to expand. <c>Left</c>
+    /// mode pushes the content frame right instead of overlaying it, which is
+    /// what the user actually expects when they expand a sidebar. The pair of
+    /// PaneOpening / PaneClosing handlers below toggles between the two modes.
+    /// </summary>
+    private void OnNavPaneOpening(NavigationView sender, object args)
+    {
+        // Touch an instance member so the analyzer doesn't flag this as static —
+        // XAML event handlers must be instance methods to wire from markup.
+        _ = this.NavView;
+        if (sender.PaneDisplayMode != NavigationViewPaneDisplayMode.Left)
+        {
+            sender.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
+        }
+    }
+
+    private void OnNavPaneClosing(NavigationView sender, NavigationViewPaneClosingEventArgs args)
+    {
+        _ = this.NavView;
+        if (sender.PaneDisplayMode != NavigationViewPaneDisplayMode.LeftCompact)
+        {
+            sender.PaneDisplayMode = NavigationViewPaneDisplayMode.LeftCompact;
+        }
+    }
+
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
     {
         if (_suppressNavSelection || args.SelectedItem is not NavigationViewItem item || item.Tag is not string tag)

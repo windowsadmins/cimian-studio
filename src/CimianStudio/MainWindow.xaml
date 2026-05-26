@@ -59,7 +59,7 @@
 
             <TextBlock x:Name="AppTitleText"
                        Grid.Column="4"
-                       Text="CimianStudio"
+                       Text="Cimian Studio"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        VerticalAlignment="Center" />
             <StackPanel Grid.Column="5"
@@ -127,11 +127,13 @@
             x:Name="NavView"
             Grid.Row="1"
             IsBackButtonVisible="Collapsed"
-            IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"
-            PaneDisplayMode="Left"
+            PaneDisplayMode="LeftCompact"
+            CompactPaneLength="48"
             OpenPaneLength="200"
             Loaded="OnNavViewLoaded"
+            PaneOpening="OnNavPaneOpening"
+            PaneClosing="OnNavPaneClosing"
             SelectionChanged="NavView_SelectionChanged">
 
             <muxc:NavigationView.Resources>

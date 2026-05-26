@@ -57,6 +57,37 @@ public sealed partial class RepositoryPage : Page
         InitializeComponent();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+        SizeChanged += OnPageSizeChanged;
+    }
+
+    /// <summary>
+    /// Pixel width below which the right section flows under the left section.
+    /// Picked so that the 5-card rows still render legibly above the threshold
+    /// — at the page's content width (window minus sidebar and our padding)
+    /// each card gets roughly 110px above this point, which fits the longest
+    /// labels ("Empty manifests", "Recent imports") without ellipsis.
+    /// </summary>
+    private const double TopSectionStackThreshold = 1180;
+
+    private void OnPageSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        ApplyTopSectionLayout(e.NewSize.Width);
+    }
+
+    private void ApplyTopSectionLayout(double pageWidth)
+    {
+        if (RightSection is null || LeftSection is null)
+        {
+            return;
+        }
+        var stacked = pageWidth < TopSectionStackThreshold;
+        // When stacked, each section spans both columns so it gets the full
+        // page width — otherwise it'd still only occupy half. When side-by-
+        // side, ColumnSpan=1 keeps each section in its own column.
+        Grid.SetRow(RightSection, stacked ? 1 : 0);
+        Grid.SetColumn(RightSection, stacked ? 0 : 1);
+        Grid.SetColumnSpan(RightSection, stacked ? 2 : 1);
+        Grid.SetColumnSpan(LeftSection, stacked ? 2 : 1);
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs e)
@@ -71,6 +102,9 @@ public sealed partial class RepositoryPage : Page
 
         RepoNameText.Text = repo.Name;
         RepoPathText.Text = repo.RootPath;
+        // Apply initial layout — SizeChanged hasn't necessarily fired yet if
+        // the page was created at its final size.
+        ApplyTopSectionLayout(ActualWidth);
         _searchService.ProgressChanged += OnSearchProgress;
         UpdateIndexingPill(_searchService.IsReady ? null : new SearchIndexProgress(0, 0, false));
         await LoadRecentsAsync().ConfigureAwait(true);
@@ -417,20 +451,33 @@ public sealed partial class RepositoryPage : Page
         TopDevelopersList.Visibility = topDevelopers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         TopDevelopersEmpty.Visibility = topDevelopers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // Aggregates for the stat-row cards. Repo bytes = sum of installer sizes
-        // we actually know about; missing/zero sizes don't contribute. Largest
-        // single = the biggest installer.Size in the set.
-        long repoBytes = 0;
+        // Repo size = actual disk usage of pkgs/, not the sum of pkginfo
+        // installer.size fields. pkginfo's installer.size is a metadata hint
+        // that often lags reality (or is missing entirely on legacy entries);
+        // for the dashboard "Repo size" tile the user expects truth-on-disk,
+        // including the long-tail of files that aren't a primary installer
+        // (subdirectory assets, supporting blobs). Offloaded to a worker
+        // thread because the walk is bounded by FS metadata I/O.
+        long repoBytes = await Task.Run(() => ComputeDirectoryBytes(repo.PkgsPath)).ConfigureAwait(true);
+
+        // Largest single still uses pkginfo's installer.size — that's the
+        // metadata that names a single installer payload, and matching it
+        // back to a single on-disk file would need a per-package location
+        // lookup we don't otherwise need here.
         long largestSingle = 0;
         foreach (var p in packages)
         {
             var size = p.Installer?.Size ?? 0;
-            if (size > 0)
-            {
-                repoBytes += size;
-                if (size > largestSingle) largestSingle = size;
-            }
+            if (size > largestSingle) largestSingle = size;
         }
+
+        // Reclaimable = sum of actual on-disk sizes for orphan packages'
+        // installer locations. Falls back to installer.size if the location
+        // is unknown or the file is missing.
+        var orphanSet = new HashSet<string>(
+            orphansAll.Select(p => p.Name ?? string.Empty),
+            StringComparer.OrdinalIgnoreCase);
+        long reclaimable = await Task.Run(() => ComputeReclaimableBytes(packages, orphanSet, repo.PkgsPath)).ConfigureAwait(true);
 
         var iconCount = CountIcons(repo);
         var emptyManifests = manifests.Count(m =>
@@ -441,6 +488,10 @@ public sealed partial class RepositoryPage : Page
             && (m.DefaultInstalls is null || m.DefaultInstalls.Count == 0)
             && (m.IncludedManifests is null || m.IncludedManifests.Count == 0));
 
+        // Activity counts: walk a slice of recent commits and bucket by age +
+        // import-subject heuristics. Best-effort — no git root means all zeros.
+        var (commits24h, commits7d, imports24h, recentImports) = await ComputeActivityCountsAsync().ConfigureAwait(true);
+
         return new DashboardStats(
             PackageCount: packages.Count,
             ManifestCount: manifests.Count,
@@ -448,15 +499,157 @@ public sealed partial class RepositoryPage : Page
             CategoryCount: categoryGroups.Count,
             DeveloperCount: developerGroups.Count,
             RepoBytes: repoBytes,
+            ReclaimableBytes: reclaimable,
             OrphanCount: orphansAll.Count,
             LargestSingleBytes: largestSingle,
             IconCount: iconCount,
-            UncommittedCount: _gitEntries.Count,
-            NoDescriptionCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Description)),
+            NoIconCount: packages.Count(p => string.IsNullOrWhiteSpace(p.IconName)),
             NoCategoryCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Category)),
             NoDeveloperCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Developer)),
             NoInstallerCount: packages.Count(p => p.Installer is null),
-            EmptyManifestCount: emptyManifests);
+            EmptyManifestCount: emptyManifests,
+            UncommittedCount: _gitEntries.Count,
+            Commits24hCount: commits24h,
+            Commits7dCount: commits7d,
+            Imports24hCount: imports24h,
+            RecentImportsCount: recentImports);
+    }
+
+    /// <summary>
+    /// Pulls a generous slice of commit history once and derives four counts
+    /// from it: total commits in the last 24h / 7d, plus the subset whose
+    /// subject reads like an import (matches <see cref="ImportSubjectRegex"/>).
+    /// </summary>
+    private async Task<(int Commits24h, int Commits7d, int Imports24h, int RecentImports)> ComputeActivityCountsAsync()
+    {
+        if (_gitInfo is null)
+        {
+            return (0, 0, 0, 0);
+        }
+        IReadOnlyList<GitCommit> history;
+        try
+        {
+            history = await _gitService.GetHistoryAsync(_gitInfo, limit: 500).ConfigureAwait(true);
+        }
+        catch (Exception)
+        {
+            return (0, 0, 0, 0);
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        var day = now.AddDays(-1);
+        var week = now.AddDays(-7);
+        var c24 = 0;
+        var c7 = 0;
+        var i24 = 0;
+        var iRecent = 0;
+        foreach (var c in history)
+        {
+            var w = c.When.ToUniversalTime();
+            var isImport = ImportSubjectRegex.IsMatch(c.Subject ?? string.Empty);
+            if (w >= day)
+            {
+                c24++;
+                if (isImport) i24++;
+            }
+            if (w >= week)
+            {
+                c7++;
+                if (isImport) iRecent++;
+            }
+        }
+        return (c24, c7, i24, iRecent);
+    }
+
+    /// <summary>
+    /// Identifies commits authored by the import wizard. Matches both the
+    /// CLI's own messages (<c>cimiimport: …</c>) and the more generic
+    /// <c>import: …</c> / <c>imports …</c> patterns the wizard's auto-message
+    /// uses. Case-insensitive.
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex ImportSubjectRegex =
+        new(@"^\s*(cimiimport|import|imports?)\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Sums the size of every file under <paramref name="root"/> recursively.
+    /// Returns 0 if the directory doesn't exist; swallows per-file I/O errors
+    /// (permission denied on a single path shouldn't bomb the whole dashboard).
+    /// </summary>
+    private static long ComputeDirectoryBytes(string root)
+    {
+        if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
+        {
+            return 0;
+        }
+        long total = 0;
+        try
+        {
+            // EnumerationOptions with IgnoreInaccessible so we don't bail on
+            // a single locked / permission-denied path partway through.
+            var opts = new EnumerationOptions
+            {
+                RecurseSubdirectories = true,
+                IgnoreInaccessible = true,
+                AttributesToSkip = FileAttributes.ReparsePoint,
+            };
+            foreach (var path in Directory.EnumerateFiles(root, "*", opts))
+            {
+                try
+                {
+                    total += new FileInfo(path).Length;
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return total;
+    }
+
+    /// <summary>
+    /// For each orphan package, look up its installer's on-disk size
+    /// (<see cref="Installer.Location"/> joined under pkgs/). Falls back to
+    /// pkginfo's <c>installer.size</c> when the on-disk lookup fails so a
+    /// missing-from-disk orphan still contributes a sensible estimate.
+    /// </summary>
+    private static long ComputeReclaimableBytes(
+        IReadOnlyList<Package> packages,
+        HashSet<string> orphanNames,
+        string pkgsRoot)
+    {
+        long total = 0;
+        foreach (var p in packages)
+        {
+            if (string.IsNullOrEmpty(p.Name) || !orphanNames.Contains(p.Name))
+            {
+                continue;
+            }
+
+            var location = p.Installer?.Location;
+            var added = false;
+            if (!string.IsNullOrEmpty(location) && !string.IsNullOrEmpty(pkgsRoot))
+            {
+                try
+                {
+                    var fullPath = Path.GetFullPath(Path.Combine(pkgsRoot, location));
+                    if (File.Exists(fullPath))
+                    {
+                        total += new FileInfo(fullPath).Length;
+                        added = true;
+                    }
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+                catch (ArgumentException) { }
+            }
+            if (!added)
+            {
+                total += p.Installer?.Size ?? 0;
+            }
+        }
+        return total;
     }
 
     private static int CountIcons(CimianRepository repo)
@@ -582,9 +775,37 @@ public sealed partial class RepositoryPage : Page
         }
     }
 
+    /// <summary>
+    /// Splits a metric-card value into its numeric prefix and any trailing
+    /// alphabetic unit ("239.3" + "GB"). Returns (value, null) when the
+    /// string is a plain number with no unit suffix.
+    /// </summary>
+    private static (string Number, string? Unit) SplitNumberAndUnit(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return (value, null);
+        }
+        var i = 0;
+        while (i < value.Length && (char.IsDigit(value[i]) || value[i] == '.' || value[i] == ','))
+        {
+            i++;
+        }
+        if (i == 0 || i == value.Length)
+        {
+            return (value, null);
+        }
+        return (value[..i], value[i..]);
+    }
+
+    /// <summary>
+    /// Formats a byte count compactly: "239.3GB", "380.1MB", no space between
+    /// the number and the unit so the value reads as a single chip on the
+    /// dashboard cards. Plain bytes drop the unit entirely ("0" not "0 B").
+    /// </summary>
     private static string FormatByteSize(long bytes)
     {
-        if (bytes < 1024) return string.Create(CultureInfo.InvariantCulture, $"{bytes} B");
+        if (bytes < 1024) return string.Create(CultureInfo.InvariantCulture, $"{bytes}B");
         double value = bytes;
         string[] units = ["KB", "MB", "GB", "TB"];
         var unit = 0;
@@ -594,7 +815,7 @@ public sealed partial class RepositoryPage : Page
             value /= 1024;
             unit++;
         }
-        return string.Create(CultureInfo.InvariantCulture, $"{value:0.#} {units[unit]}");
+        return string.Create(CultureInfo.InvariantCulture, $"{value:0.#}{units[unit]}");
     }
 
     private void OnOrphanClicked(object sender, ItemClickEventArgs e)
@@ -620,57 +841,105 @@ public sealed partial class RepositoryPage : Page
     }
 
     /// <summary>
-    /// Populates the three metric rows on the dashboard. Stats row A is the
-    /// top-line counts (Packages / Manifests / Catalogs / Categories /
-    /// Developers); row B mixes filesystem and git facts (Repo size / Orphan
-    /// packages / Largest single / Uncommitted / Recent commits); the health
-    /// row counts pkginfo records missing required-feeling fields. Each card
-    /// is clickable where a destination page exists.
+    /// Populates the four metric rows on the dashboard. Each row is a Grid
+    /// with five <c>*</c>-width columns so cards always share the available
+    /// width equally (and every card across the four rows is the same size).
     /// </summary>
     private void BuildStatCards(CimianRepository repo, DashboardStats stats)
     {
-        StatsRowA.Items.Clear();
-        StatsRowA.Items.Add(BuildCard("Packages", stats.PackageCount.ToString(CultureInfo.InvariantCulture), navTag: "packages"));
-        StatsRowA.Items.Add(BuildCard("Manifests", stats.ManifestCount.ToString(CultureInfo.InvariantCulture), navTag: "manifests"));
-        StatsRowA.Items.Add(BuildCard("Catalogs", stats.CatalogCount.ToString(CultureInfo.InvariantCulture), navTag: "catalogs"));
-        StatsRowA.Items.Add(BuildCard("Categories", stats.CategoryCount.ToString(CultureInfo.InvariantCulture), navTag: "categories"));
-        StatsRowA.Items.Add(BuildCard("Developers", stats.DeveloperCount.ToString(CultureInfo.InvariantCulture), navTag: "developers"));
+        FillGridRow(StatsRowA, [
+            ("Packages", stats.PackageCount.ToString(CultureInfo.InvariantCulture), "packages"),
+            ("Manifests", stats.ManifestCount.ToString(CultureInfo.InvariantCulture), "manifests"),
+            ("Catalogs", stats.CatalogCount.ToString(CultureInfo.InvariantCulture), "catalogs"),
+            ("Categories", stats.CategoryCount.ToString(CultureInfo.InvariantCulture), "categories"),
+            ("Developers", stats.DeveloperCount.ToString(CultureInfo.InvariantCulture), "developers"),
+        ]);
 
-        StatsRowB.Items.Clear();
-        StatsRowB.Items.Add(BuildCard("Repo size", FormatByteSize(stats.RepoBytes), navTag: null));
-        StatsRowB.Items.Add(BuildCard("Orphan packages", stats.OrphanCount.ToString(CultureInfo.InvariantCulture), navTag: null));
-        StatsRowB.Items.Add(BuildCard("Largest single", FormatByteSize(stats.LargestSingleBytes), navTag: null));
-        StatsRowB.Items.Add(BuildCard("Icons", stats.IconCount.ToString(CultureInfo.InvariantCulture), navTag: "icons"));
-        StatsRowB.Items.Add(BuildCard("Uncommitted", stats.UncommittedCount.ToString(CultureInfo.InvariantCulture), navTag: "git"));
+        FillGridRow(StatsRowB, [
+            ("Repo size", FormatByteSize(stats.RepoBytes), null),
+            ("Reclaimable", FormatByteSize(stats.ReclaimableBytes), null),
+            ("Orphan packages", stats.OrphanCount.ToString(CultureInfo.InvariantCulture), null),
+            ("Largest single", FormatByteSize(stats.LargestSingleBytes), null),
+            ("Icons", stats.IconCount.ToString(CultureInfo.InvariantCulture), "icons"),
+        ]);
 
-        HealthRow.Items.Clear();
-        HealthRow.Items.Add(BuildCard("No description", stats.NoDescriptionCount.ToString(CultureInfo.InvariantCulture), navTag: null));
-        HealthRow.Items.Add(BuildCard("No category", stats.NoCategoryCount.ToString(CultureInfo.InvariantCulture), navTag: null));
-        HealthRow.Items.Add(BuildCard("No developer", stats.NoDeveloperCount.ToString(CultureInfo.InvariantCulture), navTag: null));
-        HealthRow.Items.Add(BuildCard("No installer", stats.NoInstallerCount.ToString(CultureInfo.InvariantCulture), navTag: null));
-        HealthRow.Items.Add(BuildCard("Empty manifests", stats.EmptyManifestCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        FillGridRow(HealthRow, [
+            ("No icon", stats.NoIconCount.ToString(CultureInfo.InvariantCulture), null),
+            ("No category", stats.NoCategoryCount.ToString(CultureInfo.InvariantCulture), null),
+            ("No developer", stats.NoDeveloperCount.ToString(CultureInfo.InvariantCulture), null),
+            ("No installer", stats.NoInstallerCount.ToString(CultureInfo.InvariantCulture), null),
+            ("Empty manifests", stats.EmptyManifestCount.ToString(CultureInfo.InvariantCulture), null),
+        ]);
+
+        FillGridRow(ActivityRow, [
+            ("Uncommitted", stats.UncommittedCount.ToString(CultureInfo.InvariantCulture), "git"),
+            ("Commits (24h)", stats.Commits24hCount.ToString(CultureInfo.InvariantCulture), "git"),
+            ("Commits (7d)", stats.Commits7dCount.ToString(CultureInfo.InvariantCulture), "git"),
+            ("Imports (24h)", stats.Imports24hCount.ToString(CultureInfo.InvariantCulture), "git"),
+            ("Recent imports", stats.RecentImportsCount.ToString(CultureInfo.InvariantCulture), "git"),
+        ]);
+    }
+
+    private static void FillGridRow(Grid row, (string Label, string Value, string? NavTag)[] cards)
+    {
+        row.Children.Clear();
+        for (var i = 0; i < cards.Length; i++)
+        {
+            var card = BuildCard(cards[i].Label, cards[i].Value, cards[i].NavTag);
+            Grid.SetColumn(card, i);
+            row.Children.Add(card);
+        }
     }
 
     /// <summary>Compact metric card. Clickable when <paramref name="navTag"/> is set.</summary>
     private static Border BuildCard(string label, string value, string? navTag)
     {
         var stack = new StackPanel { Spacing = 2 };
+        // CaptionTextBlockStyle already carries the secondary-emphasis brush
+        // via ThemeResource. Don't override Foreground here — looking up
+        // TextFillColorSecondaryBrush off Application.Resources resolves
+        // statically, so it ends up bound to whatever brush was current at
+        // app start, which then renders invisibly after a theme switch.
         stack.Children.Add(new TextBlock
         {
             Text = label,
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
-            Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+            TextWrapping = TextWrapping.Wrap,
         });
-        stack.Children.Add(new TextBlock
+        // Value text. The number portion uses Title size; if the string ends
+        // in a byte-size unit (KB/MB/GB/TB/B), the unit is split off into a
+        // smaller Run so "239.3GB" reads as a big "239.3" next to a compact
+        // "GB" badge, instead of the whole string scaling huge.
+        var valueText = new TextBlock
         {
-            Text = value,
             Style = (Style)Application.Current.Resources["TitleTextBlockStyle"],
-        });
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            TextWrapping = TextWrapping.NoWrap,
+        };
+        var (numberPart, unitPart) = SplitNumberAndUnit(value);
+        if (unitPart is null)
+        {
+            valueText.Text = numberPart;
+        }
+        else
+        {
+            valueText.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = numberPart });
+            valueText.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
+            {
+                Text = unitPart,
+                FontSize = 14,
+            });
+        }
+        stack.Children.Add(valueText);
 
+        // No MinWidth: cards live inside 5-column Grids with `Width="*"`, so
+        // they share the row's available width equally. Letting them shrink
+        // freely is what makes the dashboard responsive to window resize
+        // without ever clipping content off-screen.
         var card = new Border
         {
-            Padding = new Thickness(14, 10, 14, 10),
-            MinWidth = 148,
+            Padding = new Thickness(12, 8, 12, 8),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
             Child = stack,
             Style = (Style)Application.Current.Resources["CardStyle"],
             Translation = new System.Numerics.Vector3(0, 0, 16),
@@ -708,15 +977,20 @@ public sealed partial class RepositoryPage : Page
         int CategoryCount,
         int DeveloperCount,
         long RepoBytes,
+        long ReclaimableBytes,
         int OrphanCount,
         long LargestSingleBytes,
         int IconCount,
-        int UncommittedCount,
-        int NoDescriptionCount,
+        int NoIconCount,
         int NoCategoryCount,
         int NoDeveloperCount,
         int NoInstallerCount,
-        int EmptyManifestCount);
+        int EmptyManifestCount,
+        int UncommittedCount,
+        int Commits24hCount,
+        int Commits7dCount,
+        int Imports24hCount,
+        int RecentImportsCount);
 
     private async void OnValidateClicked(object sender, RoutedEventArgs e)
     {
