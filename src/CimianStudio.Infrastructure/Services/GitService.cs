@@ -330,6 +330,72 @@ public sealed class GitService : IGitService
         }, cancellationToken);
     }
 
+    public Task<GitSimpleResult> ApplyPatchAsync(GitRepositoryInfo info, string patchText, bool cached, bool reverse, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(patchText);
+        return Task.Run(() =>
+        {
+            var args = new List<string> { "apply" };
+            if (cached) args.Add("--cached");
+            if (reverse) args.Add("--reverse");
+            // --recount makes git tolerate slightly off line counts in the
+            // synthesized hunk header. --unidiff-zero allows zero-context
+            // patches if the caller built one. Both make the API forgiving.
+            args.Add("--recount");
+            args.Add("--whitespace=nowarn");
+            args.Add("-");
+            var (code, output) = RunGitWithStdin(info.GitRoot, args, patchText);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Variant of <see cref="RunGit"/> that pipes <paramref name="stdin"/> to
+    /// the child <c>git</c> process. Used by <see cref="ApplyPatchAsync"/> to
+    /// hand <c>git apply</c> a single-hunk patch over stdin instead of writing
+    /// a temp file.
+    /// </summary>
+    private static (int ExitCode, string Output) RunGitWithStdin(string workingDir, IEnumerable<string> args, string stdin)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDir,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+
+        using var proc = new Process { StartInfo = psi };
+        try
+        {
+            if (!proc.Start())
+            {
+                return (-1, "git failed to start");
+            }
+            // Patch text uses LF endings — git apply is sensitive to CR/LF.
+            proc.StandardInput.NewLine = "\n";
+            proc.StandardInput.Write(stdin);
+            if (!stdin.EndsWith('\n')) proc.StandardInput.Write('\n');
+            proc.StandardInput.Close();
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            var output = string.Concat(stdout, stderr).TrimEnd();
+            return (proc.ExitCode, output);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            return (-1, $"git not found on PATH: {ex.Message}");
+        }
+    }
+
     public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);

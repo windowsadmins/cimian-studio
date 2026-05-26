@@ -307,12 +307,8 @@
                                       HorizontalScrollMode="Enabled"
                                       HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Auto"
-                                      Padding="10">
-                            <TextBlock x:Name="DiffText"
-                                       FontFamily="Cascadia Mono, Consolas"
-                                       FontSize="12"
-                                       TextWrapping="NoWrap"
-                                       IsTextSelectionEnabled="True" />
+                                      Padding="0">
+                            <StackPanel x:Name="DiffContent" Spacing="10" Padding="10" />
                         </ScrollViewer>
                         <TextBlock x:Name="DiffPlaceholder"
                                    Text="Select a changed file to see its diff."
@@ -339,7 +335,6 @@
                         <Grid RowSpacing="6">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <TextBox Grid.Row="0"
@@ -347,18 +342,19 @@
                                      PlaceholderText="Filter by SHA, subject, author, or ref"
                                      TextChanged="OnHistorySearchChanged"
                                      Margin="8,8,8,0" />
-                            <Button Grid.Row="1"
-                                    x:Name="LoadMoreCommitsButton"
-                                    Content="Load 200 more commits"
-                                    Click="OnLoadMoreCommitsClicked"
-                                    Margin="8,0,8,0"
-                                    HorizontalAlignment="Stretch"
-                                    Visibility="Collapsed" />
-                            <ListView Grid.Row="2"
+                            <ListView Grid.Row="1"
                                       x:Name="HistoryList"
                                       SelectionMode="Single"
                                       SelectionChanged="OnHistorySelectionChanged"
                                       Padding="0,2,0,2">
+                                <ListView.Footer>
+                                    <Button x:Name="LoadMoreCommitsButton"
+                                            Content="Load 200 more commits"
+                                            Click="OnLoadMoreCommitsClicked"
+                                            Margin="8,8,8,12"
+                                            HorizontalAlignment="Stretch"
+                                            Visibility="Collapsed" />
+                                </ListView.Footer>
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem">
                                         <Setter Property="Padding" Value="0" />
@@ -490,12 +486,8 @@
                                           HorizontalScrollMode="Enabled"
                                           HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Auto"
-                                          Padding="10">
-                                <TextBlock x:Name="HistoryDiffText"
-                                           FontFamily="Cascadia Mono, Consolas"
-                                           FontSize="12"
-                                           TextWrapping="NoWrap"
-                                           IsTextSelectionEnabled="True" />
+                                          Padding="0">
+                                <StackPanel x:Name="HistoryDiffContent" Spacing="10" Padding="10" />
                             </ScrollViewer>
                             <TextBlock x:Name="HistoryDiffPlaceholder"
                                        Text="Select a commit to see its diff."
