@@ -1121,10 +1121,7 @@ public sealed partial class GitPage : Page
         }
         else
         {
-            ResultBar.Severity = InfoBarSeverity.Success;
-            ResultBar.Title = "Stashed working tree";
-            ResultBar.Message = result.Output;
-            ResultBar.IsOpen = true;
+            ShowSuccess("Stashed working tree", result.Output);
         }
         await RefreshAsync().ConfigureAwait(true);
     }
@@ -1139,10 +1136,7 @@ public sealed partial class GitPage : Page
         }
         else
         {
-            ResultBar.Severity = InfoBarSeverity.Success;
-            ResultBar.Title = title;
-            ResultBar.Message = result.Output;
-            ResultBar.IsOpen = true;
+            ShowSuccess(title, result.Output);
         }
         await RefreshAsync().ConfigureAwait(true);
     }
@@ -1551,9 +1545,11 @@ public sealed partial class GitPage : Page
 
     /// <summary>
     /// Shared structured-diff rendering used by both the working-tree diff
-    /// (with hunk actions) and the historic commit diff (read-only).
+    /// (with hunk actions + Edit button) and the historic commit diff (no
+    /// actions, no Edit). <paramref name="editAbsolutePath"/> is the file
+    /// the Edit button on the working-tree card should open.
     /// </summary>
-    private void RenderStructuredDiff(string diff, StackPanel target, bool allowHunkActions)
+    private void RenderStructuredDiff(string diff, StackPanel target, bool allowHunkActions, string? editAbsolutePath = null)
     {
         var files = UnifiedDiffParser.Parse(diff);
         if (files.Count == 0)
@@ -1563,7 +1559,7 @@ public sealed partial class GitPage : Page
         }
         foreach (var f in files)
         {
-            target.Children.Add(BuildFileCard(f, allowHunkActions));
+            target.Children.Add(BuildFileCard(f, allowHunkActions, editAbsolutePath));
         }
     }
 
@@ -1957,8 +1953,6 @@ public sealed partial class GitPage : Page
             return;
         }
 
-        DiffHeader.Text = _selectedRow.Entry.RelativePath;
-        OpenInEditorButton.Visibility = Visibility.Visible;
         DiffPlaceholder.Visibility = Visibility.Collapsed;
         DiffContent.Children.Clear();
         DiffContent.Children.Add(new TextBlock
@@ -1990,14 +1984,16 @@ public sealed partial class GitPage : Page
             return;
         }
 
-        RenderStructuredDiff(diff, DiffContent, allowHunkActions: true);
+        RenderStructuredDiff(diff, DiffContent, allowHunkActions: true, editAbsolutePath: _selectedRow.Entry.AbsolutePath);
     }
 
     private static readonly FontFamily MonoFont = new("Cascadia Mono, Consolas");
     private static readonly Color GutterColor = Color.FromArgb(0xFF, 0x8A, 0x8A, 0x8A);
     private static readonly Color AddedRowColor = Color.FromArgb(0x55, 0x4E, 0xC9, 0x70);
     private static readonly Color RemovedRowColor = Color.FromArgb(0x55, 0xE7, 0x6F, 0x6F);
-    private static readonly Color HunkBarColor = Color.FromArgb(0x55, 0x77, 0x9D, 0xFF);
+    // Neutral translucent gray for the hunk header strip — sits between the
+    // file-header card surface and the body without colored emphasis.
+    private static readonly Color HunkBarColor = Color.FromArgb(0x22, 0x80, 0x80, 0x80);
 
     /// <summary>
     /// Builds the per-file diff card: a header strip with the file path, a
@@ -2005,11 +2001,12 @@ public sealed partial class GitPage : Page
     /// "hunk card" per <see cref="DiffHunk"/>. Each hunk card carries its
     /// own [Stage Chunk] / [Discard Chunk] buttons.
     /// </summary>
-    private Border BuildFileCard(DiffFile file, bool allowHunkActions)
+    private Border BuildFileCard(DiffFile file, bool allowHunkActions, string? editAbsolutePath = null)
     {
         var stack = new StackPanel { Spacing = 0 };
 
-        // File header strip.
+        // File header strip: [path] [summary] [Edit?]. Edit only when this is
+        // the working-tree diff and we know which on-disk file to open.
         var header = new Grid
         {
             Padding = new Thickness(12, 8, 12, 8),
@@ -2017,6 +2014,7 @@ public sealed partial class GitPage : Page
             ColumnSpacing = 8,
         };
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
         var pathText = new TextBlock
@@ -2037,6 +2035,7 @@ public sealed partial class GitPage : Page
             Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
             Style = (Style)Application.Current.Resources["CaptionTextBlockStyle"],
             VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
         };
         summary.Inlines.Add(new Run
         {
@@ -2051,6 +2050,22 @@ public sealed partial class GitPage : Page
         });
         Grid.SetColumn(summary, 1);
         header.Children.Add(summary);
+
+        if (allowHunkActions && !string.IsNullOrEmpty(editAbsolutePath))
+        {
+            var editButton = new Button
+            {
+                Content = "Edit",
+                Padding = new Thickness(12, 4, 12, 4),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            ToolTipService.SetToolTip(editButton, "Open in editor (o)");
+            var path = editAbsolutePath;
+            editButton.Click += async (_, _) => await OpenInEditorAsync(path).ConfigureAwait(true);
+            Grid.SetColumn(editButton, 2);
+            header.Children.Add(editButton);
+        }
+
         stack.Children.Add(header);
 
         foreach (var hunk in file.Hunks)
@@ -2090,21 +2105,23 @@ public sealed partial class GitPage : Page
         Grid.SetColumn(positionText, 0);
         bar.Children.Add(positionText);
 
+        Button? stageButton = null;
+        Button? discardButton = null;
         if (allowHunkActions)
         {
             // Stage / Discard Chunk only make sense for the working-tree diff.
             // Historic commit diffs in the History tab are read-only — those
             // hunks can't be mutated retroactively.
             var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-            var stageButton = new Button { Content = "Stage Chunk", Padding = new Thickness(10, 4, 10, 4) };
-            stageButton.Click += async (_, _) => await ApplyHunkAsync(file, hunk, mode: HunkApplyMode.Stage).ConfigureAwait(true);
+            stageButton = new Button { Content = "Stage Chunk", Padding = new Thickness(10, 4, 10, 4) };
+            stageButton.Click += async (_, _) => await ApplyHunkOrSelectionAsync(file, hunk, mode: HunkApplyMode.Stage).ConfigureAwait(true);
             actions.Children.Add(stageButton);
-            var discardButton = new Button
+            discardButton = new Button
             {
                 Content = "Discard Chunk",
                 Padding = new Thickness(10, 4, 10, 4),
             };
-            discardButton.Click += async (_, _) => await ApplyHunkAsync(file, hunk, mode: HunkApplyMode.Discard).ConfigureAwait(true);
+            discardButton.Click += async (_, _) => await ApplyHunkOrSelectionAsync(file, hunk, mode: HunkApplyMode.Discard).ConfigureAwait(true);
             actions.Children.Add(discardButton);
             Grid.SetColumn(actions, 1);
             bar.Children.Add(actions);
@@ -2112,13 +2129,15 @@ public sealed partial class GitPage : Page
 
         container.Children.Add(bar);
 
-        // Body: one row per diff line, two narrow gutters of line numbers + the
-        // raw line content. Background tint per kind so the eye can scan a hunk
-        // without re-reading each row's leading +/-.
+        // Body: one row per diff line — [old# | new# | content].
+        // The trailing per-line actions column is parked (see comments below);
+        // it lives in the layout as a zero-width definition so future re-enable
+        // doesn't disturb other widths.
         var body = new Grid { Padding = new Thickness(0) };
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(44) });
         body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(0) });
 
         var oldLine = hunk.OldStart;
         var newLine = hunk.NewStart;
@@ -2176,11 +2195,14 @@ public sealed partial class GitPage : Page
             Grid.SetColumn(newNum, 1);
             body.Children.Add(newNum);
 
-            // Content cell with background tint.
+            // Content cell with background tint, plus a left-edge "selected"
+            // accent for staged-line selection on +/- rows.
             var contentCell = new Border
             {
                 Background = new SolidColorBrush(background),
                 Padding = new Thickness(8, 1, 8, 1),
+                BorderThickness = new Thickness(3, 0, 0, 0),
+                BorderBrush = new SolidColorBrush(Colors.Transparent),
             };
             contentCell.Child = new TextBlock
             {
@@ -2190,36 +2212,228 @@ public sealed partial class GitPage : Page
                 IsTextSelectionEnabled = true,
                 Foreground = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"],
             };
+
+            // ── Per-line selection (parked) ─────────────────────────────────
+            // The click-to-select + partial-patch flow trips git apply on
+            // new files (synthesized "diff --git ... /dev/null" patches don't
+            // round-trip cleanly through --cached --recount for arbitrary line
+            // subsets). Re-enable once the partial-patch construction handles
+            // the new-file / no-context cases — until then we ship the
+            // per-hunk Stage Chunk / Discard Chunk path which works.
+            //
+            // if (allowHunkActions && (dl.Kind == DiffLineKind.Added || dl.Kind == DiffLineKind.Removed))
+            // {
+            //     var cellRef = contentCell;
+            //     var lineRef = dl;
+            //     var baseBackground = background;
+            //     cellRef.Tapped += (_, _) =>
+            //     {
+            //         lineRef.IsSelected = !lineRef.IsSelected;
+            //         ApplyLineSelectionVisual(cellRef, lineRef, baseBackground);
+            //         UpdateHunkActionLabels(hunk, stageButton, discardButton);
+            //     };
+            // }
+
             Grid.SetRow(contentCell, rowIdx);
             Grid.SetColumn(contentCell, 2);
             body.Children.Add(contentCell);
+
+            // ── Per-line action buttons (parked) ───────────────────────────
+            // Same partial-patch dependency as the click-to-select feature
+            // above; parked until ToPartialPatch handles new-file diffs.
+            //
+            // if (allowHunkActions && (dl.Kind == DiffLineKind.Added || dl.Kind == DiffLineKind.Removed))
+            // {
+            //     var actionsCell = BuildPerLineActions(file, hunk, dl);
+            //     Grid.SetRow(actionsCell, rowIdx);
+            //     Grid.SetColumn(actionsCell, 3);
+            //     body.Children.Add(actionsCell);
+            // }
 
             rowIdx++;
         }
         container.Children.Add(body);
 
+        // Per-line selection is disabled (see comments above), so no need to
+        // sync chunk-action labels with selected-line counts.
+        // UpdateHunkActionLabels(hunk, stageButton, discardButton);
+
         return container;
+    }
+
+    /// <summary>
+    /// Builds the trailing "[Stage] [Discard]" button pair shown on every
+    /// <c>+</c>/<c>−</c> row in working-tree mode. Each button acts on just
+    /// that one line via a single-line partial patch.
+    /// </summary>
+    private StackPanel BuildPerLineActions(DiffFile file, DiffHunk hunk, DiffLine line)
+    {
+        var stack = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Spacing = 2,
+            Padding = new Thickness(6, 0, 6, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        var stage = new Button
+        {
+            Content = "+",
+            FontFamily = MonoFont,
+            FontSize = 11,
+            Padding = new Thickness(6, 0, 6, 0),
+            MinWidth = 22,
+            Height = 20,
+        };
+        ToolTipService.SetToolTip(stage, "Stage this line");
+        stage.Click += async (_, _) => await ApplySingleLineAsync(file, hunk, line, HunkApplyMode.Stage).ConfigureAwait(true);
+        stack.Children.Add(stage);
+
+        var discard = new Button
+        {
+            Content = "−",
+            FontFamily = MonoFont,
+            FontSize = 11,
+            Padding = new Thickness(6, 0, 6, 0),
+            MinWidth = 22,
+            Height = 20,
+        };
+        ToolTipService.SetToolTip(discard, "Discard this line");
+        discard.Click += async (_, _) => await ApplySingleLineAsync(file, hunk, line, HunkApplyMode.Discard).ConfigureAwait(true);
+        stack.Children.Add(discard);
+
+        return stack;
+    }
+
+    /// <summary>
+    /// Stage or discard a single line. Done by flipping just that line's
+    /// IsSelected, building a partial patch, then restoring whatever
+    /// selection state was there before — single-line buttons should never
+    /// surprise a user who'd previously selected lines for a multi-line op.
+    /// </summary>
+    private async Task ApplySingleLineAsync(DiffFile file, DiffHunk hunk, DiffLine line, HunkApplyMode mode)
+    {
+        if (_info is null) return;
+
+        var savedSelection = hunk.Lines.Select(l => l.IsSelected).ToArray();
+        try
+        {
+            foreach (var l in hunk.Lines) l.IsSelected = false;
+            line.IsSelected = true;
+            var patch = hunk.ToPartialPatch(file);
+            if (patch is null) return;
+
+            var cached = mode == HunkApplyMode.Stage;
+            var reverse = mode == HunkApplyMode.Discard;
+
+            if (mode == HunkApplyMode.Discard)
+            {
+                var dialog = new ContentDialog
+                {
+                    Title = "Discard this line?",
+                    Content = $"This permanently undoes one {(line.Kind == DiffLineKind.Added ? "added" : "removed")} line in {file.DisplayPath}.",
+                    PrimaryButtonText = "Discard",
+                    CloseButtonText = "Cancel",
+                    DefaultButton = ContentDialogButton.Close,
+                    XamlRoot = Content.XamlRoot,
+                };
+                if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+            }
+
+            var result = await _gitService.ApplyPatchAsync(_info, patch, cached, reverse).ConfigureAwait(true);
+            if (!result.Success)
+            {
+                ShowError(mode == HunkApplyMode.Stage ? "Stage line failed" : "Discard line failed", result.Output);
+            }
+            else
+            {
+                ShowSuccess(mode == HunkApplyMode.Stage ? "Line staged" : "Line discarded", result.Output);
+            }
+        }
+        finally
+        {
+            // Restore selection. RefreshAsync below re-renders anyway, but
+            // this keeps the model consistent if we abort the dialog.
+            for (var i = 0; i < hunk.Lines.Count && i < savedSelection.Length; i++)
+            {
+                hunk.Lines[i].IsSelected = savedSelection[i];
+            }
+        }
+
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private static readonly Color SelectedAccentColor = Color.FromArgb(0xFF, 0x00, 0x9A, 0xE5);
+    private static readonly Color AddedRowSelectedColor = Color.FromArgb(0x99, 0x4E, 0xC9, 0x70);
+    private static readonly Color RemovedRowSelectedColor = Color.FromArgb(0x99, 0xE7, 0x6F, 0x6F);
+
+    private static void ApplyLineSelectionVisual(Border cell, DiffLine line, Color baseBackground)
+    {
+        if (line.IsSelected)
+        {
+            cell.BorderBrush = new SolidColorBrush(SelectedAccentColor);
+            cell.Background = new SolidColorBrush(line.Kind == DiffLineKind.Added
+                ? AddedRowSelectedColor
+                : RemovedRowSelectedColor);
+        }
+        else
+        {
+            cell.BorderBrush = new SolidColorBrush(Colors.Transparent);
+            cell.Background = new SolidColorBrush(baseBackground);
+        }
+    }
+
+    private static void UpdateHunkActionLabels(DiffHunk hunk, Button? stageButton, Button? discardButton)
+    {
+        if (stageButton is null && discardButton is null) return;
+        var selectedCount = hunk.Lines.Count(l => l.IsSelected);
+        var stageLabel = selectedCount > 0 ? $"Stage {selectedCount} line{(selectedCount == 1 ? "" : "s")}" : "Stage Chunk";
+        var discardLabel = selectedCount > 0 ? $"Discard {selectedCount} line{(selectedCount == 1 ? "" : "s")}" : "Discard Chunk";
+        if (stageButton is not null) stageButton.Content = stageLabel;
+        if (discardButton is not null) discardButton.Content = discardLabel;
     }
 
     private enum HunkApplyMode { Stage, Discard }
 
-    private async Task ApplyHunkAsync(DiffFile file, DiffHunk hunk, HunkApplyMode mode)
+    /// <summary>
+    /// Dispatches a Stage / Discard click to either the whole-hunk patch
+    /// (when no lines are checked) or the per-line partial patch (when one or
+    /// more <c>+</c>/<c>−</c> lines are selected).
+    /// </summary>
+    private async Task ApplyHunkOrSelectionAsync(DiffFile file, DiffHunk hunk, HunkApplyMode mode)
     {
         if (_info is null) return;
 
-        // Stage = git apply --cached (move hunk into the index).
-        // Discard = git apply --reverse (undo the hunk in the working tree).
-        // If we ever add a real index-staged view, we'll also want
-        //   Unstage = git apply --cached --reverse.
+        var hasSelection = hunk.Lines.Any(l => l.IsSelected);
+        var selectedCount = hunk.Lines.Count(l => l.IsSelected);
         var cached = mode == HunkApplyMode.Stage;
         var reverse = mode == HunkApplyMode.Discard;
+
+        string? patch;
+        string scopeBlurb;
+        if (hasSelection)
+        {
+            patch = hunk.ToPartialPatch(file);
+            if (patch is null)
+            {
+                ShowError(
+                    "No effective change",
+                    "After applying your selection, the partial patch contains no actual changes. Pick at least one + or − line.");
+                return;
+            }
+            scopeBlurb = $"{selectedCount} selected line{(selectedCount == 1 ? "" : "s")}";
+        }
+        else
+        {
+            patch = hunk.ToPatch(file);
+            scopeBlurb = $"the whole chunk ({hunk.AddedCount + hunk.RemovedCount}-line change)";
+        }
 
         if (mode == HunkApplyMode.Discard)
         {
             var dialog = new ContentDialog
             {
-                Title = "Discard this chunk?",
-                Content = $"This permanently undoes the {hunk.AddedCount + hunk.RemovedCount}-line change in {file.DisplayPath} between this hunk's boundaries.",
+                Title = "Discard?",
+                Content = $"This permanently undoes {scopeBlurb} in {file.DisplayPath}.",
                 PrimaryButtonText = "Discard",
                 CloseButtonText = "Cancel",
                 DefaultButton = ContentDialogButton.Close,
@@ -2228,18 +2442,16 @@ public sealed partial class GitPage : Page
             if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
         }
 
-        var patch = hunk.ToPatch(file);
         var result = await _gitService.ApplyPatchAsync(_info, patch, cached, reverse).ConfigureAwait(true);
+        var verb = mode == HunkApplyMode.Stage ? "staged" : "discarded";
         if (!result.Success)
         {
-            ShowError(mode == HunkApplyMode.Stage ? "Stage chunk failed" : "Discard chunk failed", result.Output);
+            ShowError(mode == HunkApplyMode.Stage ? "Stage failed" : "Discard failed", result.Output);
         }
         else
         {
-            ResultBar.Severity = InfoBarSeverity.Success;
-            ResultBar.Title = mode == HunkApplyMode.Stage ? "Chunk staged" : "Chunk discarded";
-            ResultBar.Message = string.IsNullOrEmpty(result.Output) ? "Done." : result.Output;
-            ResultBar.IsOpen = true;
+            var title = $"{scopeBlurb[..1].ToUpper(CultureInfo.InvariantCulture)}{scopeBlurb[1..]} {verb}";
+            ShowSuccess(title, result.Output);
         }
         await RefreshAsync().ConfigureAwait(true);
     }
@@ -2261,16 +2473,8 @@ public sealed partial class GitPage : Page
 
     private void ClearDiff()
     {
-        DiffHeader.Text = "Diff";
-        OpenInEditorButton.Visibility = Visibility.Collapsed;
         DiffPlaceholder.Visibility = Visibility.Visible;
         DiffContent.Children.Clear();
-    }
-
-    private async void OnOpenInEditorClicked(object sender, RoutedEventArgs e)
-    {
-        if (_selectedRow is null) return;
-        await OpenInEditorAsync(_selectedRow.Entry.AbsolutePath).ConfigureAwait(true);
     }
 
     private async Task OpenInEditorAsync(string absolutePath)
@@ -2481,16 +2685,51 @@ public sealed partial class GitPage : Page
         }
     }
 
-    private void ShowSuccess(string message)
+    private void ShowSuccess(string message) => ShowSuccess("Done", message);
+
+    private void ShowSuccess(string title, string message)
     {
         ResultBar.Severity = InfoBarSeverity.Success;
-        ResultBar.Title = "Done";
-        ResultBar.Message = message;
+        ResultBar.Title = title;
+        ResultBar.Message = string.IsNullOrEmpty(message) ? "Done." : message;
+        ResultBar.ActionButton = null;
         ResultBar.IsOpen = true;
+        StartResultBarAutoDismiss();
+    }
+
+    private Microsoft.UI.Xaml.DispatcherTimer? _resultBarTimer;
+    private static readonly TimeSpan ResultBarLingerTime = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Auto-closes the success / info ResultBar after a short linger so a
+    /// successful op doesn't leave a permanent banner on screen. Each call
+    /// restarts the timer, so the latest message always gets the full window.
+    /// </summary>
+    private void StartResultBarAutoDismiss()
+    {
+        _resultBarTimer ??= new Microsoft.UI.Xaml.DispatcherTimer { Interval = ResultBarLingerTime };
+        _resultBarTimer.Stop();
+        _resultBarTimer.Tick -= OnResultBarTimerTick;
+        _resultBarTimer.Tick += OnResultBarTimerTick;
+        _resultBarTimer.Start();
+    }
+
+    private void OnResultBarTimerTick(object? sender, object e)
+    {
+        _resultBarTimer?.Stop();
+        // Only auto-dismiss success / info bars. Errors and warnings stay open
+        // until the user explicitly closes them (or another op replaces them).
+        if (ResultBar.Severity is InfoBarSeverity.Success or InfoBarSeverity.Informational)
+        {
+            ResultBar.IsOpen = false;
+        }
     }
 
     private void ShowError(string title, string output)
     {
+        // Cancel a pending auto-dismiss timer — we don't want the error to
+        // disappear in 5s if a success fired just before.
+        _resultBarTimer?.Stop();
         ResultBar.Severity = InfoBarSeverity.Error;
         ResultBar.Title = title;
         ResultBar.Message = string.IsNullOrWhiteSpace(output) ? "(no output)" : output;
@@ -2538,10 +2777,7 @@ public sealed partial class GitPage : Page
             }
             else
             {
-                ResultBar.Severity = InfoBarSeverity.Success;
-                ResultBar.Title = "No lock file present";
-                ResultBar.Message = "Whatever held the lock has released it. Try the operation again.";
-                ResultBar.ActionButton = null;
+                ShowSuccess("No lock file present", "Whatever held the lock has released it. Try the operation again.");
                 return;
             }
         }
@@ -2562,10 +2798,7 @@ public sealed partial class GitPage : Page
         try
         {
             File.Delete(lockPath);
-            ResultBar.Severity = InfoBarSeverity.Success;
-            ResultBar.Title = "Lock file removed";
-            ResultBar.Message = "Try the operation again.";
-            ResultBar.ActionButton = null;
+            ShowSuccess("Lock file removed", "Try the operation again.");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {

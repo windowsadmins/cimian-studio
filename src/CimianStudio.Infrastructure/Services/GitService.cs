@@ -340,12 +340,17 @@ public sealed class GitService : IGitService
             if (cached) args.Add("--cached");
             if (reverse) args.Add("--reverse");
             // --recount makes git tolerate slightly off line counts in the
-            // synthesized hunk header. --unidiff-zero allows zero-context
-            // patches if the caller built one. Both make the API forgiving.
+            // synthesized hunk header. --whitespace=nowarn silences CR/LF +
+            // trailing-whitespace nags that aren't actionable here.
             args.Add("--recount");
             args.Add("--whitespace=nowarn");
             args.Add("-");
-            var (code, output) = RunGitWithStdin(info.GitRoot, args, patchText);
+            // Normalise to LF-only — git apply on Windows reads CR as part of
+            // the previous line's content, so a CRLF patch trips the hunk
+            // header parser with "unexpected line: ?" / "corrupt patch".
+            var lfPatch = patchText.Replace("\r\n", "\n", StringComparison.Ordinal)
+                                   .Replace("\r", "\n", StringComparison.Ordinal);
+            var (code, output) = RunGitWithStdin(info.GitRoot, args, lfPatch);
             return new GitSimpleResult(code == 0, output);
         }, cancellationToken);
     }
@@ -817,12 +822,13 @@ public sealed class GitService : IGitService
             using var repo = new Repository(info.GitRoot);
             var status = repo.RetrieveStatus(relativePath);
 
-            // Untracked: show the file contents prefixed with "+ " (capped to keep huge
-            // binaries from blowing up the UI).
+            // Untracked: synthesize a proper unified diff with /dev/null as the
+            // source so the structured renderer treats it as one all-added
+            // hunk (and per-hunk Stage / Discard work on it too).
             if ((status & FileStatus.NewInWorkdir) != 0 && (status & FileStatus.NewInIndex) == 0)
             {
                 var abs = Path.GetFullPath(Path.Combine(info.GitRoot, relativePath));
-                return RenderUntrackedFile(abs);
+                return RenderUntrackedFile(abs, relativePath);
             }
 
             var options = new CompareOptions
@@ -845,14 +851,20 @@ public sealed class GitService : IGitService
         }
     }
 
-    private static string RenderUntrackedFile(string absolutePath)
+    private static string RenderUntrackedFile(string absolutePath, string relativePath)
     {
         const int maxBytes = 64 * 1024; // 64 KB cap for the diff panel.
         try
         {
             var info = new FileInfo(absolutePath);
             if (!info.Exists) return "(file no longer exists)";
-            if (info.Length == 0) return "(new file, empty)";
+            if (info.Length == 0)
+            {
+                // Even an empty new file gets a real diff envelope so the
+                // structured renderer shows the file card with a zero-hunk
+                // summary, not a fallback text blob.
+                return BuildEmptyNewFilePatch(relativePath);
+            }
             if (LooksBinary(absolutePath)) return $"(new binary file, {info.Length:N0} bytes)";
 
             var bytesToRead = (int)Math.Min(info.Length, maxBytes);
@@ -861,20 +873,61 @@ public sealed class GitService : IGitService
             var read = stream.Read(buffer, 0, bytesToRead);
             var text = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
 
-            var sb = new StringBuilder(text.Length + 128);
-            sb.Append("(new file: ").Append(Path.GetFileName(absolutePath)).Append(", ")
-              .Append(info.Length.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" bytes)");
-            foreach (var line in text.Split('\n'))
+            // Normalise to LF — the parser handles CRLF but the patch we
+            // emit reads cleaner without stray \r at line ends.
+            var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+
+            // Trailing newline behaviour: if the file ends with a newline the
+            // split produces an empty final element; drop it so we don't emit
+            // a phantom "+" line. If it does NOT end in a newline we need to
+            // emit the "\ No newline at end of file" trailer per git format.
+            var endedWithNewline = text.EndsWith('\n');
+            var emitLines = endedWithNewline && lines.Length > 0 && string.IsNullOrEmpty(lines[^1])
+                ? lines[..^1]
+                : lines;
+
+            // Forward-slash form for the diff envelope — git's own diff output
+            // uses POSIX separators even on Windows.
+            var slashPath = relativePath.Replace('\\', '/');
+
+            var sb = new StringBuilder(text.Length + 256);
+            sb.Append("diff --git a/").Append(slashPath).Append(" b/").Append(slashPath).Append('\n');
+            sb.Append("new file mode 100644\n");
+            sb.Append("index 0000000..0000000\n");
+            sb.Append("--- /dev/null\n");
+            sb.Append("+++ b/").Append(slashPath).Append('\n');
+            sb.Append("@@ -0,0 +1,").Append(emitLines.Length).Append(" @@\n");
+            foreach (var line in emitLines)
             {
-                sb.Append("+ ").Append(line.TrimEnd('\r')).Append('\n');
+                sb.Append('+').Append(line).Append('\n');
             }
-            if (info.Length > maxBytes) sb.AppendLine("…(truncated)");
+            if (!endedWithNewline)
+            {
+                sb.Append("\\ No newline at end of file\n");
+            }
+            if (info.Length > maxBytes)
+            {
+                // Mark the truncation as a context line so the renderer doesn't
+                // mistake it for an added line — it's a UI hint, not real content.
+                sb.Append(" …(truncated, file is ").Append(info.Length.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)).Append(" bytes)\n");
+            }
             return sb.ToString();
         }
         catch (IOException ex)
         {
             return $"(failed to read new file: {ex.Message})";
         }
+    }
+
+    private static string BuildEmptyNewFilePatch(string relativePath)
+    {
+        var slashPath = relativePath.Replace('\\', '/');
+        return
+            $"diff --git a/{slashPath} b/{slashPath}\n" +
+            "new file mode 100644\n" +
+            "index 0000000..0000000\n" +
+            "--- /dev/null\n" +
+            $"+++ b/{slashPath}\n";
     }
 
     private static bool LooksBinary(string path)
