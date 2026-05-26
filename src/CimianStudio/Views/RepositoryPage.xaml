@@ -22,6 +22,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <StackPanel Grid.Row="0" Spacing="4">
@@ -189,6 +190,90 @@
                     </ItemsControl.ItemTemplate>
                 </ItemsControl>
             </ScrollViewer>
+
+            <!-- Repository insights: orphans + top facets + largest packages. Computed
+                 once per Loaded; refreshes when packages or manifests change. Each row
+                 click navigates to the relevant page with that selection. -->
+            <Border Grid.Row="9"
+                    x:Name="InsightsCard"
+                    Style="{StaticResource CardStyle}"
+                    Shadow="{StaticResource CardShadow}"
+                    Translation="0,0,16"
+                    Padding="20,16,20,16">
+                <StackPanel Spacing="12">
+                    <TextBlock Text="Repository insights"
+                               Style="{StaticResource BodyStrongTextBlockStyle}" />
+                    <Grid ColumnSpacing="20" RowSpacing="20">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <StackPanel Grid.Row="0" Grid.Column="0" Spacing="6">
+                            <TextBlock Text="Orphan packages" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock x:Name="OrphansHint"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Packages not referenced by any manifest." />
+                            <ListView x:Name="OrphansList"
+                                      SelectionMode="None"
+                                      IsItemClickEnabled="True"
+                                      ItemClick="OnOrphanClicked"
+                                      MaxHeight="180" />
+                            <TextBlock x:Name="OrphansEmpty"
+                                       Text="None — every package is referenced by a manifest."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="0" Grid.Column="1" Spacing="6">
+                            <TextBlock Text="Largest packages" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       Text="Top 5 by installer size." />
+                            <ListView x:Name="LargestList"
+                                      SelectionMode="None"
+                                      IsItemClickEnabled="True"
+                                      ItemClick="OnLargestClicked"
+                                      MaxHeight="180" />
+                            <TextBlock x:Name="LargestEmpty"
+                                       Text="No installer sizes recorded yet."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Grid.Column="0" Spacing="6">
+                            <TextBlock Text="Top categories" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ListView x:Name="TopCategoriesList"
+                                      SelectionMode="None"
+                                      MaxHeight="180" />
+                            <TextBlock x:Name="TopCategoriesEmpty"
+                                       Text="No categories yet."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Row="1" Grid.Column="1" Spacing="6">
+                            <TextBlock Text="Top developers" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <ListView x:Name="TopDevelopersList"
+                                      SelectionMode="None"
+                                      MaxHeight="180" />
+                            <TextBlock x:Name="TopDevelopersEmpty"
+                                       Text="No developers yet."
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                       Visibility="Collapsed" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+            </Border>
         </Grid>
     </ScrollViewer>
 </Page>
