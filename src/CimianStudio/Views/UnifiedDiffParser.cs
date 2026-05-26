@@ -37,7 +37,7 @@ internal static class UnifiedDiffParser
                 currentFile = new DiffFile { DiffLine = line };
                 files.Add(currentFile);
                 fileHeaderBuilder.Clear();
-                fileHeaderBuilder.AppendLine(line);
+                fileHeaderBuilder.Append(line).Append('\n');
                 inFileHeader = true;
 
                 // Try to extract a/Path and b/Path off the diff --git line.
@@ -71,7 +71,7 @@ internal static class UnifiedDiffParser
 
             if (inFileHeader)
             {
-                fileHeaderBuilder.AppendLine(line);
+                fileHeaderBuilder.Append(line).Append('\n');
                 continue;
             }
 
@@ -219,25 +219,94 @@ internal sealed class DiffHunk
 
     /// <summary>
     /// Reconstructs a minimal patch text containing this hunk under the
-    /// supplied file header. Ready to pipe to <c>git apply</c>.
+    /// supplied file header. Ready to pipe to <c>git apply</c>. LF endings
+    /// throughout — git apply on Windows misparses CRLF inside hunks.
     /// </summary>
     public string ToPatch(DiffFile file)
     {
         var sb = new StringBuilder();
         sb.Append(file.FileHeader);
-        if (!file.FileHeader.EndsWith('\n')) sb.AppendLine();
-        sb.AppendLine(Header);
+        if (!file.FileHeader.EndsWith('\n')) sb.Append('\n');
+        sb.Append(Header).Append('\n');
         foreach (var line in Lines)
         {
-            if (line.Kind == DiffLineKind.NoNewline)
+            sb.Append(line.Raw).Append('\n');
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// Builds a partial patch that only includes the lines whose
+    /// <see cref="DiffLine.IsSelected"/> flag is true. Unselected <c>+</c>
+    /// lines drop out (the line stays in the working tree but isn't part of
+    /// the index change); unselected <c>-</c> lines are converted to context
+    /// (the line stays in HEAD AND in the index). The <c>@@</c> header is
+    /// recounted so <c>git apply</c> accepts the result.
+    /// </summary>
+    /// <returns>
+    /// A patch string, or null when no line is selected and / or after
+    /// filtering there are no actual changes left in the hunk.
+    /// </returns>
+    public string? ToPartialPatch(DiffFile file)
+    {
+        // Walk lines and rewrite them per the selection rule above.
+        var filtered = new List<string>();
+        var oldCount = 0;
+        var newCount = 0;
+        var hasChange = false;
+
+        foreach (var line in Lines)
+        {
+            switch (line.Kind)
             {
-                sb.AppendLine(line.Raw);
-            }
-            else
-            {
-                sb.AppendLine(line.Raw);
+                case DiffLineKind.Context:
+                    filtered.Add(line.Raw);
+                    oldCount++;
+                    newCount++;
+                    break;
+                case DiffLineKind.Added:
+                    if (line.IsSelected)
+                    {
+                        filtered.Add(line.Raw);
+                        newCount++;
+                        hasChange = true;
+                    }
+                    // else: drop entirely
+                    break;
+                case DiffLineKind.Removed:
+                    if (line.IsSelected)
+                    {
+                        filtered.Add(line.Raw);
+                        oldCount++;
+                        hasChange = true;
+                    }
+                    else
+                    {
+                        // Convert "-foo" to " foo" so the line stays in both
+                        // sides of the resulting patch.
+                        filtered.Add(' ' + line.Raw[1..]);
+                        oldCount++;
+                        newCount++;
+                    }
+                    break;
+                case DiffLineKind.NoNewline:
+                    filtered.Add(line.Raw);
+                    break;
             }
         }
+
+        if (!hasChange)
+        {
+            return null;
+        }
+
+        var sb = new StringBuilder();
+        sb.Append(file.FileHeader);
+        if (!file.FileHeader.EndsWith('\n')) sb.Append('\n');
+        sb.Append("@@ -").Append(OldStart).Append(',').Append(oldCount)
+          .Append(" +").Append(NewStart).Append(',').Append(newCount)
+          .Append(" @@").Append('\n');
+        foreach (var line in filtered) sb.Append(line).Append('\n');
         return sb.ToString();
     }
 }
@@ -250,8 +319,24 @@ internal enum DiffLineKind
     NoNewline,
 }
 
-internal readonly record struct DiffLine(DiffLineKind Kind, string Raw)
+/// <summary>
+/// Mutable so the diff renderer can flip <see cref="IsSelected"/> on user
+/// click and the patch builder can read selection state. Reference type, not
+/// struct, because the renderer holds direct references from row click
+/// handlers.
+/// </summary>
+internal sealed class DiffLine
 {
+    public DiffLineKind Kind { get; }
+    public string Raw { get; }
+    public bool IsSelected { get; set; }
+
+    public DiffLine(DiffLineKind kind, string raw)
+    {
+        Kind = kind;
+        Raw = raw;
+    }
+
     /// <summary>The line content without the leading +/-/space.</summary>
     public string Text => Raw.Length > 0 ? Raw[1..] : string.Empty;
 }

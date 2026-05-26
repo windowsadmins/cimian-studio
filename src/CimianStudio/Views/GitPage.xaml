@@ -134,16 +134,17 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Spacing="6">
-                    <TextBlock Text="Subject (≤72 chars recommended)"
-                               Style="{StaticResource CaptionTextBlockStyle}" />
+                <!-- Subject + Body. The Subject caption is omitted so the
+                     TextBox top aligns with the top of the diff card on the
+                     right — the placeholder ("Promote Office 2025 to
+                     Production") signals the field's purpose. Body keeps its
+                     caption since it has no placeholder of its own. -->
+                <StackPanel Grid.Row="0" Spacing="8">
                     <TextBox x:Name="SubjectBox"
-                             PlaceholderText="Promote Office 2025 to Production"
+                             PlaceholderText="Subject (≤72 chars recommended)"
                              TextChanged="OnSubjectChanged" />
-                    <TextBlock Text="Body (optional)"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Margin="0,4,0,0" />
                     <TextBox x:Name="BodyBox"
+                             PlaceholderText="Body (optional)"
                              AcceptsReturn="True"
                              TextWrapping="Wrap"
                              FontFamily="Cascadia Mono, Consolas"
@@ -271,36 +272,12 @@
                                    ResizeBehavior="PreviousAndNext"
                                    ResizeDirection="Columns" />
 
-            <Grid Grid.Column="2" RowSpacing="6">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <Grid Grid.Row="0" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               x:Name="DiffHeader"
-                               Text="Diff"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center" />
-                    <HyperlinkButton Grid.Column="1"
-                                     x:Name="OpenInEditorButton"
-                                     Content="Open in editor"
-                                     Visibility="Collapsed"
-                                     VerticalAlignment="Center"
-                                     Click="OnOpenInEditorClicked">
-                        <ToolTipService.ToolTip>
-                            <TextBlock Text="Open in editor (o)" />
-                        </ToolTipService.ToolTip>
-                    </HyperlinkButton>
-                </Grid>
-
-                <Border Grid.Row="1"
+            <Grid Grid.Column="2">
+                <!-- Single-row layout so the top of the diff card aligns with
+                     the top of the subject text box on the left. The Edit
+                     button + file path now live inside the file card's own
+                     header strip instead of in a separate "Diff" caption row. -->
+                <Border
                         Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16">
                     <Grid>
                         <ScrollViewer x:Name="DiffScroller"
