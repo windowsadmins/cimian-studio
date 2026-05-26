@@ -127,10 +127,10 @@
             x:Name="NavView"
             Grid.Row="1"
             IsBackButtonVisible="Collapsed"
+            IsPaneToggleButtonVisible="False"
             IsSettingsVisible="False"
-            PaneDisplayMode="LeftCompact"
-            CompactPaneLength="48"
-            OpenPaneLength="240"
+            PaneDisplayMode="Left"
+            OpenPaneLength="200"
             Loaded="OnNavViewLoaded"
             SelectionChanged="NavView_SelectionChanged">
 
@@ -166,24 +166,14 @@
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavIcons" Tag="icons" Content="Icons">
+                <muxc:NavigationViewItem x:Name="NavBuild" Tag="build" Content="Build">
                     <muxc:NavigationViewItem.Icon>
-                        <!-- Placeholder. OnNavViewLoaded swaps the Viewbox.Child for a
-                             stroked Lucide image Path so the stroke weight matches
-                             the rest of the rail exactly. -->
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0EC;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavCategories" Tag="categories" Content="Categories">
+                <muxc:NavigationViewItem x:Name="NavImport" Tag="import" Content="Import">
                     <muxc:NavigationViewItem.Icon>
-                        <!-- Placeholder. OnNavViewLoaded swaps in a stroked Lucide tags Path. -->
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
-                    </muxc:NavigationViewItem.Icon>
-                </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavDevelopers" Tag="developers" Content="Developers">
-                    <muxc:NavigationViewItem.Icon>
-                        <!-- Placeholder. OnNavViewLoaded swaps in a stroked Lucide users Path. -->
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0B2;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
                 <muxc:NavigationViewItem x:Name="NavGit" Tag="git" Content="Git">
@@ -194,16 +184,6 @@
                              Lucide font glyph rendered visibly thinner at small
                              sizes than the title bar's 2px-stroked Path. -->
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0E2;" />
-                    </muxc:NavigationViewItem.Icon>
-                </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavImport" Tag="import" Content="Import">
-                    <muxc:NavigationViewItem.Icon>
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0B2;" />
-                    </muxc:NavigationViewItem.Icon>
-                </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavBuild" Tag="build" Content="Build">
-                    <muxc:NavigationViewItem.Icon>
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0EC;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
             </muxc:NavigationView.MenuItems>
