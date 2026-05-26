@@ -71,12 +71,16 @@ public sealed partial class RepositoryPage : Page
 
         RepoNameText.Text = repo.Name;
         RepoPathText.Text = repo.RootPath;
-        BuildStatCards(repo);
         _searchService.ProgressChanged += OnSearchProgress;
         UpdateIndexingPill(_searchService.IsReady ? null : new SearchIndexProgress(0, 0, false));
         await LoadRecentsAsync().ConfigureAwait(true);
         await LoadGitStatusAsync(repo).ConfigureAwait(true);
-        await LoadInsightsAsync().ConfigureAwait(true);
+        // Insights computes the per-package facets and stashes the orphan /
+        // largest lists used both for the leaderboard lists below and the
+        // matching stat-row counts. Run before BuildStatCards.
+        var stats = await LoadInsightsAsync(repo).ConfigureAwait(true);
+        BuildStatCards(repo, stats);
+        await LoadRecentCommitsAsync().ConfigureAwait(true);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
@@ -330,15 +334,15 @@ public sealed partial class RepositoryPage : Page
         }
     }
 
-    private const int InsightsTopN = 5;
+    private const int InsightsTopN = 10;
 
     /// <summary>
-    /// Populates the Insights card: orphan packages (not referenced by any
-    /// manifest), largest packages by installer size, and top-N category /
-    /// developer buckets. Best-effort — failures collapse to empty hints
-    /// rather than breaking the page.
+    /// Populates the leaderboard panels (orphans, largest, top categories,
+    /// top developers) and returns an aggregate <see cref="DashboardStats"/>
+    /// snapshot used to fill the metric rows. Best-effort — failures collapse
+    /// to empty hints rather than breaking the page.
     /// </summary>
-    private async Task LoadInsightsAsync()
+    private async Task<DashboardStats> LoadInsightsAsync(CimianRepository repo)
     {
         IReadOnlyList<Package> packages;
         IReadOnlyList<Manifest> manifests;
@@ -353,12 +357,12 @@ public sealed partial class RepositoryPage : Page
             manifests = [];
         }
 
-        // Orphans: package whose `name` doesn't appear in any manifest's install/
-        // update/uninstall/optional/default lists (top-level *and* nested under
-        // conditional_items). Case-insensitive to match Cimian's matching rules.
+        // Orphans
         var referenced = CollectReferencedPackageNames(manifests);
-        _orphanPackages = [.. packages
+        var orphansAll = packages
             .Where(p => !string.IsNullOrEmpty(p.Name) && !referenced.Contains(p.Name))
+            .ToList();
+        _orphanPackages = [.. orphansAll
             .OrderBy(p => p.EffectiveDisplayName, StringComparer.OrdinalIgnoreCase)
             .Take(InsightsTopN)];
 
@@ -368,9 +372,9 @@ public sealed partial class RepositoryPage : Page
         OrphansList.ItemsSource = orphanRows;
         OrphansList.Visibility = orphanRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         OrphansEmpty.Visibility = orphanRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        OrphansCountText.Text = string.Create(CultureInfo.InvariantCulture, $"({orphansAll.Count})");
 
-        // Largest: order by Installer.Size desc. Packages with no installer or
-        // no recorded size are excluded — surfacing zeros would only mislead.
+        // Largest
         _largestPackages = [.. packages
             .Where(p => p.Installer is { Size: > 0 })
             .OrderByDescending(p => p.Installer!.Size ?? 0)
@@ -382,16 +386,15 @@ public sealed partial class RepositoryPage : Page
         LargestList.Visibility = largestRows.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         LargestEmpty.Visibility = largestRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        // Top categories / developers: simple group-by-then-take. (Uncategorized)
-        // and (Unknown) buckets are dropped from the leaderboards — a "top 5"
-        // that's half empty/unknown isn't useful here; the Categories and
-        // Developers tabs already surface those buckets in full.
-        var topCategories = packages
+        // Top categories / developers — drop (Uncategorized) / (Unknown).
+        var categoryGroups = packages
             .Where(p => !string.IsNullOrWhiteSpace(p.Category))
             .GroupBy(p => p.Category!.Trim(), StringComparer.OrdinalIgnoreCase)
             .Select(g => (Name: g.Key, Count: g.Count()))
             .OrderByDescending(t => t.Count)
             .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var topCategories = categoryGroups
             .Take(InsightsTopN)
             .Select(t => $"{t.Name}  ·  {t.Count}")
             .ToList();
@@ -399,18 +402,135 @@ public sealed partial class RepositoryPage : Page
         TopCategoriesList.Visibility = topCategories.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         TopCategoriesEmpty.Visibility = topCategories.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        var topDevelopers = packages
+        var developerGroups = packages
             .Where(p => !string.IsNullOrWhiteSpace(p.Developer))
             .GroupBy(p => p.Developer!.Trim(), StringComparer.OrdinalIgnoreCase)
             .Select(g => (Name: g.Key, Count: g.Count()))
             .OrderByDescending(t => t.Count)
             .ThenBy(t => t.Name, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var topDevelopers = developerGroups
             .Take(InsightsTopN)
             .Select(t => $"{t.Name}  ·  {t.Count}")
             .ToList();
         TopDevelopersList.ItemsSource = topDevelopers;
         TopDevelopersList.Visibility = topDevelopers.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         TopDevelopersEmpty.Visibility = topDevelopers.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        // Aggregates for the stat-row cards. Repo bytes = sum of installer sizes
+        // we actually know about; missing/zero sizes don't contribute. Largest
+        // single = the biggest installer.Size in the set.
+        long repoBytes = 0;
+        long largestSingle = 0;
+        foreach (var p in packages)
+        {
+            var size = p.Installer?.Size ?? 0;
+            if (size > 0)
+            {
+                repoBytes += size;
+                if (size > largestSingle) largestSingle = size;
+            }
+        }
+
+        var iconCount = CountIcons(repo);
+        var emptyManifests = manifests.Count(m =>
+            (m.ManagedInstalls is null || m.ManagedInstalls.Count == 0)
+            && (m.ManagedUpdates is null || m.ManagedUpdates.Count == 0)
+            && (m.ManagedUninstalls is null || m.ManagedUninstalls.Count == 0)
+            && (m.OptionalInstalls is null || m.OptionalInstalls.Count == 0)
+            && (m.DefaultInstalls is null || m.DefaultInstalls.Count == 0)
+            && (m.IncludedManifests is null || m.IncludedManifests.Count == 0));
+
+        return new DashboardStats(
+            PackageCount: packages.Count,
+            ManifestCount: manifests.Count,
+            CatalogCount: repo.CatalogCount,
+            CategoryCount: categoryGroups.Count,
+            DeveloperCount: developerGroups.Count,
+            RepoBytes: repoBytes,
+            OrphanCount: orphansAll.Count,
+            LargestSingleBytes: largestSingle,
+            IconCount: iconCount,
+            UncommittedCount: _gitEntries.Count,
+            NoDescriptionCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Description)),
+            NoCategoryCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Category)),
+            NoDeveloperCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Developer)),
+            NoInstallerCount: packages.Count(p => p.Installer is null),
+            EmptyManifestCount: emptyManifests);
+    }
+
+    private static int CountIcons(CimianRepository repo)
+    {
+        var dir = repo.IconsPath;
+        if (!Directory.Exists(dir)) return 0;
+        try
+        {
+            string[] exts = [".png", ".jpg", ".jpeg", ".icns"];
+            return Directory
+                .EnumerateFiles(dir, "*", SearchOption.AllDirectories)
+                .Count(f => exts.Any(e => string.Equals(Path.GetExtension(f), e, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch (IOException)
+        {
+            return 0;
+        }
+    }
+
+    private List<GitCommit> _recentCommits = [];
+
+    /// <summary>
+    /// Pulls the most recent 5 commits via IGitService.GetHistoryAsync.
+    /// Hides the panel if no git root is present or the history is empty.
+    /// </summary>
+    private async Task LoadRecentCommitsAsync()
+    {
+        if (_gitInfo is null)
+        {
+            RecentCommitsCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        IReadOnlyList<GitCommit> commits;
+        try
+        {
+            commits = await _gitService.GetHistoryAsync(_gitInfo, limit: 5).ConfigureAwait(true);
+        }
+        catch (Exception)
+        {
+            RecentCommitsCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        _recentCommits = [.. commits];
+        if (_recentCommits.Count == 0)
+        {
+            RecentCommitsCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        RecentCommitsCard.Visibility = Visibility.Visible;
+        RecentCommitsBranchText.Text = string.IsNullOrEmpty(_gitInfo.Branch)
+            ? string.Empty
+            : "on " + _gitInfo.Branch;
+        RecentCommitsList.ItemsSource = _recentCommits
+            .Select(c => $"{c.Sha[..Math.Min(7, c.Sha.Length)]}   {c.Subject}   ·   {FormatRelativeTime(c.When)}")
+            .ToList();
+    }
+
+    private void OnRecentCommitClicked(object sender, ItemClickEventArgs e)
+    {
+        // For now, jump to the Git tab; future PRs can deep-link to the commit.
+        App.MainWindowInstance?.NavigateTo("git");
+    }
+
+    private static string FormatRelativeTime(DateTimeOffset when)
+    {
+        var delta = DateTimeOffset.UtcNow - when.ToUniversalTime();
+        if (delta.TotalSeconds < 60) return "just now";
+        if (delta.TotalMinutes < 60) return string.Create(CultureInfo.InvariantCulture, $"{(int)delta.TotalMinutes}m");
+        if (delta.TotalHours < 24) return string.Create(CultureInfo.InvariantCulture, $"{(int)delta.TotalHours}h");
+        if (delta.TotalDays < 30) return string.Create(CultureInfo.InvariantCulture, $"{(int)delta.TotalDays}d");
+        return when.LocalDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
     }
 
     private static HashSet<string> CollectReferencedPackageNames(IReadOnlyList<Manifest> manifests)
@@ -499,17 +619,42 @@ public sealed partial class RepositoryPage : Page
         }
     }
 
-    private void BuildStatCards(CimianRepository repo)
+    /// <summary>
+    /// Populates the three metric rows on the dashboard. Stats row A is the
+    /// top-line counts (Packages / Manifests / Catalogs / Categories /
+    /// Developers); row B mixes filesystem and git facts (Repo size / Orphan
+    /// packages / Largest single / Uncommitted / Recent commits); the health
+    /// row counts pkginfo records missing required-feeling fields. Each card
+    /// is clickable where a destination page exists.
+    /// </summary>
+    private void BuildStatCards(CimianRepository repo, DashboardStats stats)
     {
-        StatsHost.Items.Clear();
-        StatsHost.Items.Add(BuildCard("Packages", repo.PackageCount));
-        StatsHost.Items.Add(BuildCard("Manifests", repo.ManifestCount));
-        StatsHost.Items.Add(BuildCard("Catalogs", repo.CatalogCount));
+        StatsRowA.Items.Clear();
+        StatsRowA.Items.Add(BuildCard("Packages", stats.PackageCount.ToString(CultureInfo.InvariantCulture), navTag: "packages"));
+        StatsRowA.Items.Add(BuildCard("Manifests", stats.ManifestCount.ToString(CultureInfo.InvariantCulture), navTag: "manifests"));
+        StatsRowA.Items.Add(BuildCard("Catalogs", stats.CatalogCount.ToString(CultureInfo.InvariantCulture), navTag: "catalogs"));
+        StatsRowA.Items.Add(BuildCard("Categories", stats.CategoryCount.ToString(CultureInfo.InvariantCulture), navTag: "categories"));
+        StatsRowA.Items.Add(BuildCard("Developers", stats.DeveloperCount.ToString(CultureInfo.InvariantCulture), navTag: "developers"));
+
+        StatsRowB.Items.Clear();
+        StatsRowB.Items.Add(BuildCard("Repo size", FormatByteSize(stats.RepoBytes), navTag: null));
+        StatsRowB.Items.Add(BuildCard("Orphan packages", stats.OrphanCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        StatsRowB.Items.Add(BuildCard("Largest single", FormatByteSize(stats.LargestSingleBytes), navTag: null));
+        StatsRowB.Items.Add(BuildCard("Icons", stats.IconCount.ToString(CultureInfo.InvariantCulture), navTag: "icons"));
+        StatsRowB.Items.Add(BuildCard("Uncommitted", stats.UncommittedCount.ToString(CultureInfo.InvariantCulture), navTag: "git"));
+
+        HealthRow.Items.Clear();
+        HealthRow.Items.Add(BuildCard("No description", stats.NoDescriptionCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        HealthRow.Items.Add(BuildCard("No category", stats.NoCategoryCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        HealthRow.Items.Add(BuildCard("No developer", stats.NoDeveloperCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        HealthRow.Items.Add(BuildCard("No installer", stats.NoInstallerCount.ToString(CultureInfo.InvariantCulture), navTag: null));
+        HealthRow.Items.Add(BuildCard("Empty manifests", stats.EmptyManifestCount.ToString(CultureInfo.InvariantCulture), navTag: null));
     }
 
-    private static Border BuildCard(string label, int count)
+    /// <summary>Compact metric card. Clickable when <paramref name="navTag"/> is set.</summary>
+    private static Border BuildCard(string label, string value, string? navTag)
     {
-        var stack = new StackPanel { Spacing = 4 };
+        var stack = new StackPanel { Spacing = 2 };
         stack.Children.Add(new TextBlock
         {
             Text = label,
@@ -518,14 +663,14 @@ public sealed partial class RepositoryPage : Page
         });
         stack.Children.Add(new TextBlock
         {
-            Text = count.ToString(CultureInfo.InvariantCulture),
+            Text = value,
             Style = (Style)Application.Current.Resources["TitleTextBlockStyle"],
         });
 
         var card = new Border
         {
-            Padding = new Thickness(20, 16, 20, 16),
-            MinWidth = 160,
+            Padding = new Thickness(14, 10, 14, 10),
+            MinWidth = 148,
             Child = stack,
             Style = (Style)Application.Current.Resources["CardStyle"],
             Translation = new System.Numerics.Vector3(0, 0, 16),
@@ -534,8 +679,44 @@ public sealed partial class RepositoryPage : Page
         {
             card.Shadow = shadow;
         }
+
+        if (navTag is not null)
+        {
+            // Hover affordance via cursor + tap-to-navigate. Keeps the card a
+            // plain Border instead of a Button so the typography / shadow of
+            // every card stays consistent.
+            card.Tag = navTag;
+            ToolTipService.SetToolTip(card, $"Open {navTag} tab");
+            card.PointerEntered += (s, _) => ((Border)s).Opacity = 0.85;
+            card.PointerExited += (s, _) => ((Border)s).Opacity = 1.0;
+            card.Tapped += (s, _) =>
+            {
+                if (s is Border b && b.Tag is string tag)
+                {
+                    App.MainWindowInstance?.NavigateTo(tag);
+                }
+            };
+        }
         return card;
     }
+
+    /// <summary>One pass of aggregate stats for the dashboard rows.</summary>
+    private sealed record DashboardStats(
+        int PackageCount,
+        int ManifestCount,
+        int CatalogCount,
+        int CategoryCount,
+        int DeveloperCount,
+        long RepoBytes,
+        int OrphanCount,
+        long LargestSingleBytes,
+        int IconCount,
+        int UncommittedCount,
+        int NoDescriptionCount,
+        int NoCategoryCount,
+        int NoDeveloperCount,
+        int NoInstallerCount,
+        int EmptyManifestCount);
 
     private async void OnValidateClicked(object sender, RoutedEventArgs e)
     {
