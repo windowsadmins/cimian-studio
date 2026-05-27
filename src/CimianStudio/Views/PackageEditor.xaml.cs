@@ -14,6 +14,7 @@ public sealed partial class PackageEditor : UserControl
     private readonly IGitService _gitService;
     private readonly IRepositoryService _repositoryService;
     private readonly ISessionState _sessionState;
+    private readonly IPackageInspectorService _packageInspector;
     private Package? _package;
     private bool _suppressDirty;
     private IReadOnlyList<string> _knownCatalogs = [];
@@ -29,7 +30,8 @@ public sealed partial class PackageEditor : UserControl
             App.Resolve<ICatalogService>(),
             App.Resolve<IGitService>(),
             App.Resolve<IRepositoryService>(),
-            App.Resolve<ISessionState>())
+            App.Resolve<ISessionState>(),
+            App.Resolve<IPackageInspectorService>())
     {
     }
 
@@ -38,20 +40,24 @@ public sealed partial class PackageEditor : UserControl
         ICatalogService catalogService,
         IGitService gitService,
         IRepositoryService repositoryService,
-        ISessionState sessionState)
+        ISessionState sessionState,
+        IPackageInspectorService packageInspector)
     {
         ArgumentNullException.ThrowIfNull(packageService);
         ArgumentNullException.ThrowIfNull(catalogService);
         ArgumentNullException.ThrowIfNull(gitService);
         ArgumentNullException.ThrowIfNull(repositoryService);
         ArgumentNullException.ThrowIfNull(sessionState);
+        ArgumentNullException.ThrowIfNull(packageInspector);
         _packageService = packageService;
         _catalogService = catalogService;
         _gitService = gitService;
         _repositoryService = repositoryService;
         _sessionState = sessionState;
+        _packageInspector = packageInspector;
         InitializeComponent();
         _sessionState.Changed += OnSessionStateChanged;
+        InstallerLocationField.TextChanged += (_, _) => UpdateInspectButtonState();
         Unloaded += (_, _) => _sessionState.Changed -= OnSessionStateChanged;
     }
 
@@ -191,6 +197,7 @@ public sealed partial class PackageEditor : UserControl
             _lastInstallerType = InstallerTypeBox.Text;
             InstallerSizeField.Text = package.Installer?.Size?.ToString(CultureInfo.InvariantCulture) ?? string.Empty;
             InstallerLocationField.Text = package.Installer?.Location ?? string.Empty;
+            UpdateInspectButtonState();
             InstallerHashField.Text = package.Installer?.Hash ?? string.Empty;
             InstallerArgsField.Text = JoinLines(package.Installer?.Arguments);
             InstallerSwitchesField.Text = JoinLines(package.Installer?.Switches);
@@ -594,6 +601,149 @@ public sealed partial class PackageEditor : UserControl
         }
         IsDirty = true;
         if (_package is not null) _sessionState.MarkPackageDirty(_package);
+    }
+
+    private void UpdateInspectButtonState()
+    {
+        var path = ResolveInstallerItemPath();
+        InspectInstallerButton.IsEnabled = path is not null && _packageInspector.CanInspect(path) && File.Exists(path);
+    }
+
+    private string? ResolveInstallerItemPath()
+    {
+        var location = InstallerLocationField.Text?.Trim();
+        if (string.IsNullOrEmpty(location)) return null;
+
+        if (Path.IsPathRooted(location) && File.Exists(location)) return location;
+
+        var repoRoot = _repositoryService.CurrentRepository?.RootPath;
+        if (string.IsNullOrEmpty(repoRoot)) return null;
+
+        var trimmed = location.TrimStart('/', '\\');
+        var underPkgs = Path.GetFullPath(Path.Combine(repoRoot, "pkgs", trimmed));
+        if (File.Exists(underPkgs)) return underPkgs;
+
+        var direct = Path.GetFullPath(Path.Combine(repoRoot, trimmed));
+        if (File.Exists(direct)) return direct;
+
+        return null;
+    }
+
+    private async void OnInspectInstaller(object sender, RoutedEventArgs e)
+    {
+        var filePath = ResolveInstallerItemPath();
+        if (filePath is null)
+        {
+            ShowStatus(InfoBarSeverity.Warning, "Installer not found", "Couldn't locate the installer under pkgs/ — check the Location.");
+            return;
+        }
+
+        if (!_packageInspector.CanInspect(filePath))
+        {
+            ShowStatus(InfoBarSeverity.Informational, "Not inspectable", "Package Inspector opens .pkg, .nupkg, and .msi files.");
+            return;
+        }
+
+        if (!_packageInspector.IsInstalled)
+        {
+            await ShowPackageInspectorMissingDialog().ConfigureAwait(true);
+            if (!_packageInspector.IsInstalled) return;
+        }
+
+        var opened = await _packageInspector.OpenAsync(filePath).ConfigureAwait(true);
+        if (!opened)
+        {
+            ShowStatus(InfoBarSeverity.Error, "Open failed", "Package Inspector couldn't open the file.");
+        }
+    }
+
+    private async Task ShowPackageInspectorMissingDialog()
+    {
+        var progressBar = new ProgressBar { Visibility = Visibility.Collapsed, IsIndeterminate = true, MinWidth = 320 };
+        var statusText = new TextBlock
+        {
+            Text = "Package Inspector inspects Windows installer payloads, scripts, and signatures. Download it from github.com/windowsadmins/pkg-inspector — Cimian Studio can install it for you.",
+            TextWrapping = TextWrapping.Wrap,
+        };
+        var body = new StackPanel { Spacing = 10 };
+        body.Children.Add(statusText);
+        body.Children.Add(progressBar);
+
+        var dialog = new ContentDialog
+        {
+            Title = "Install Package Inspector?",
+            Content = body,
+            PrimaryButtonText = "Install latest",
+            SecondaryButtonText = "Open download page",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
+            XamlRoot = this.XamlRoot,
+        };
+
+        var cts = new CancellationTokenSource();
+        var progress = new Progress<PackageInspectorInstallProgress>(p =>
+        {
+            statusText.Text = p.Stage;
+            if (p.PercentComplete is { } pct)
+            {
+                progressBar.IsIndeterminate = false;
+                progressBar.Value = pct * 100;
+            }
+            else
+            {
+                progressBar.IsIndeterminate = true;
+            }
+        });
+
+        dialog.PrimaryButtonClick += async (s, args) =>
+        {
+            var deferral = args.GetDeferral();
+            try
+            {
+                progressBar.Visibility = Visibility.Visible;
+                dialog.IsPrimaryButtonEnabled = false;
+                dialog.IsSecondaryButtonEnabled = false;
+                var result = await _packageInspector.InstallLatestAsync(progress, cts.Token).ConfigureAwait(true);
+                if (!result.Success)
+                {
+                    args.Cancel = true;
+                    statusText.Text = "Install failed: " + (result.ErrorMessage ?? "Unknown error.");
+                    progressBar.Visibility = Visibility.Collapsed;
+                    dialog.IsPrimaryButtonEnabled = true;
+                    dialog.IsSecondaryButtonEnabled = true;
+                }
+            }
+            finally
+            {
+                deferral.Complete();
+            }
+        };
+
+        dialog.SecondaryButtonClick += (s, args) =>
+        {
+            args.Cancel = true;
+            try
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = _packageInspector.DownloadPageUrl.ToString(),
+                    UseShellExecute = true,
+                };
+                System.Diagnostics.Process.Start(psi)?.Dispose();
+            }
+            catch { }
+        };
+
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            await cts.CancelAsync().ConfigureAwait(true);
+            cts.Dispose();
+            UpdateInspectButtonState();
+        }
     }
 
     private async void OnSaveClicked(object sender, RoutedEventArgs e)
