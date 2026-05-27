@@ -27,51 +27,118 @@ public sealed class PackageInspectorService : IPackageInspectorService
 
     public string? FindExecutable()
     {
+        // Only trust the GUI Package Inspector install locations.
+        // We deliberately skip PATH probing — Cimian ships its own
+        // `pkginspector.exe` CLI helper under C:\Program Files\Cimian\,
+        // and that one is not the GUI inspector we want to launch.
         foreach (var candidate in CandidatePaths())
         {
             if (File.Exists(candidate)) return candidate;
         }
-
-        var pathEnv = Environment.GetEnvironmentVariable("PATH");
-        if (!string.IsNullOrEmpty(pathEnv))
-        {
-            foreach (var dir in pathEnv.Split(Path.PathSeparator))
-            {
-                if (string.IsNullOrWhiteSpace(dir)) continue;
-                try
-                {
-                    var probe = Path.Combine(dir.Trim(), ExecutableName);
-                    if (File.Exists(probe)) return probe;
-                }
-                catch (ArgumentException) { }
-            }
-        }
-
         return null;
     }
 
-    public async Task<bool> OpenAsync(string filePath, CancellationToken cancellationToken = default)
+    public async Task<PackageInspectorLaunchResult> OpenAsync(string filePath, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(filePath);
-        await Task.Yield();
         cancellationToken.ThrowIfCancellationRequested();
+
         var exe = FindExecutable();
-        if (exe is null) return false;
-        if (!File.Exists(filePath)) return false;
+        if (exe is null)
+        {
+            return new(false, PackageInspectorLaunchFailureKind.NotInstalled, "pkginspector.exe not found in any known install location.");
+        }
+        if (!File.Exists(filePath))
+        {
+            return new(false, PackageInspectorLaunchFailureKind.FileMissing, $"Installer file not found: {filePath}");
+        }
+
+        // Pre-flight signature check: ASR's "Block executable files…trusted list"
+        // rule only lets signed exes through. If pkginspector.exe doesn't have an
+        // embedded Authenticode signature at all, the launch will fail silently
+        // with Access-denied — catch that here with a clearer hint.
+        if (!HasEmbeddedSignature(exe))
+        {
+            return new(false, PackageInspectorLaunchFailureKind.UnsignedExecutable,
+                $"{exe} has no Authenticode signature. Defender ASR will block it. Re-install Package Inspector from a signed MSI.");
+        }
 
         var psi = new ProcessStartInfo
         {
             FileName = exe,
             UseShellExecute = false,
-            CreateNoWindow = false,
+            CreateNoWindow = true,
+            WindowStyle = ProcessWindowStyle.Hidden,
+            WorkingDirectory = Path.GetDirectoryName(exe) ?? string.Empty,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
         };
         psi.ArgumentList.Add(filePath);
+
+        Process? proc;
         try
         {
-            Process.Start(psi)?.Dispose();
-            return true;
+            proc = Process.Start(psi);
         }
-        catch (Exception)
+        catch (System.ComponentModel.Win32Exception ex) when (ex.NativeErrorCode == 5)
+        {
+            // ERROR_ACCESS_DENIED — almost always Defender ASR on this fleet.
+            return new(false, PackageInspectorLaunchFailureKind.DefenderAsrBlock,
+                $"Windows blocked the launch (Access denied). This usually means Defender ASR's 'Block executable files…' rule is rejecting {Path.GetFileName(exe)}. Check Event Viewer → Microsoft-Windows-Windows Defender/Operational for event 1121.");
+        }
+        catch (Exception ex)
+        {
+            return new(false, PackageInspectorLaunchFailureKind.Unknown, $"{ex.GetType().Name}: {ex.Message}");
+        }
+
+        if (proc is null)
+        {
+            return new(false, PackageInspectorLaunchFailureKind.Unknown, "Process.Start returned null.");
+        }
+
+        // Drain stdio so pkginspector's optional console writes don't deadlock.
+        _ = proc.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        _ = proc.StandardError.ReadToEndAsync(CancellationToken.None);
+
+        // ASR can also terminate the child immediately after CreateProcess succeeds
+        // (image-load policy block). Sample after a short delay — if it died with
+        // an Access-denied-shaped exit code and no window, surface that.
+        try
+        {
+            await proc.WaitForExitAsync(cancellationToken).WaitAsync(TimeSpan.FromMilliseconds(750), cancellationToken).ConfigureAwait(false);
+            if (proc.HasExited && proc.ExitCode != 0)
+            {
+                // 0xC0000022 STATUS_ACCESS_DENIED, 0xC0000142 STATUS_DLL_INIT_FAILED,
+                // 0xC0000135 STATUS_DLL_NOT_FOUND — all consistent with ASR/EDR blocks.
+                var code = (uint)proc.ExitCode;
+                if (code is 0xC0000022 or 0xC0000142 or 0xC0000135)
+                {
+                    return new(false, PackageInspectorLaunchFailureKind.DefenderAsrBlock,
+                        $"pkginspector.exe started but was terminated immediately (exit 0x{code:X8}). Defender ASR or EDR is blocking it.");
+                }
+                return new(false, PackageInspectorLaunchFailureKind.Unknown,
+                    $"pkginspector.exe exited 0x{code:X8} right after launch.");
+            }
+        }
+        catch (TimeoutException)
+        {
+            // Still running after the sample window — good signal.
+        }
+        catch (OperationCanceledException) { }
+
+        return new(true, PackageInspectorLaunchFailureKind.None, null);
+    }
+
+    private static bool HasEmbeddedSignature(string exePath)
+    {
+        try
+        {
+#pragma warning disable SYSLIB0057 // CreateFromSignedFile is the only built-in way to read an embedded Authenticode signature without WinVerifyTrust P/Invoke.
+            using var cert = System.Security.Cryptography.X509Certificates.X509Certificate.CreateFromSignedFile(exePath);
+#pragma warning restore SYSLIB0057
+            return !string.IsNullOrEmpty(cert.Subject);
+        }
+        catch
         {
             return false;
         }
@@ -173,11 +240,16 @@ public sealed class PackageInspectorService : IPackageInspectorService
         var local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var programs = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var programsX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
-        yield return Path.Combine(local, "Programs", "PackageInspector", ExecutableName);
-        yield return Path.Combine(programs, "PackageInspector", ExecutableName);
-        if (!string.IsNullOrEmpty(programsX86))
-            yield return Path.Combine(programsX86, "PackageInspector", ExecutableName);
-        yield return Path.Combine(programs, "pkg-inspector", ExecutableName);
+        // The pkg-inspector MSI installs to C:\Program Files\PkgInspector\ — that's
+        // the canonical name. Other variants are fallbacks for hand-extracted zips.
+        var dirNames = new[] { "PkgInspector", "PackageInspector", "Package Inspector", "pkg-inspector" };
+        foreach (var dir in dirNames)
+        {
+            yield return Path.Combine(programs, dir, ExecutableName);
+            yield return Path.Combine(local, "Programs", dir, ExecutableName);
+            if (!string.IsNullOrEmpty(programsX86))
+                yield return Path.Combine(programsX86, dir, ExecutableName);
+        }
     }
 
     private static void CreateStartMenuShortcut(string exePath)
