@@ -605,8 +605,18 @@ public sealed partial class PackageEditor : UserControl
 
     private void UpdateInspectButtonState()
     {
-        var path = ResolveInstallerItemPath();
-        InspectInstallerButton.IsEnabled = path is not null && _packageInspector.CanInspect(path) && File.Exists(path);
+        var location = InstallerLocationField.Text?.Trim() ?? string.Empty;
+        var isInspectableExt = _packageInspector.CanInspect(location);
+        if (!isInspectableExt)
+        {
+            InspectInstallerButton.Visibility = Visibility.Collapsed;
+            InspectInstallerButton.IsEnabled = false;
+            return;
+        }
+
+        InspectInstallerButton.Visibility = Visibility.Visible;
+        var resolved = ResolveInstallerItemPath();
+        InspectInstallerButton.IsEnabled = resolved is not null && File.Exists(resolved);
     }
 
     private string? ResolveInstallerItemPath()
@@ -631,30 +641,50 @@ public sealed partial class PackageEditor : UserControl
 
     private async void OnInspectInstaller(object sender, RoutedEventArgs e)
     {
+        var location = InstallerLocationField.Text?.Trim() ?? string.Empty;
+        var repoRoot = _repositoryService.CurrentRepository?.RootPath ?? "(none)";
         var filePath = ResolveInstallerItemPath();
+
         if (filePath is null)
         {
-            ShowStatus(InfoBarSeverity.Warning, "Installer not found", "Couldn't locate the installer under pkgs/ — check the Location.");
+            ShowStatus(InfoBarSeverity.Warning,
+                "Installer not found",
+                $"Location: '{location}'  Repo: {repoRoot}  Tried: <repo>/pkgs/<loc> and <repo>/<loc>");
             return;
         }
 
         if (!_packageInspector.CanInspect(filePath))
         {
-            ShowStatus(InfoBarSeverity.Informational, "Not inspectable", "Package Inspector opens .pkg, .nupkg, and .msi files.");
+            ShowStatus(InfoBarSeverity.Informational, "Not inspectable",
+                $"Package Inspector opens .pkg / .nupkg / .msi (got: {Path.GetExtension(filePath)}).");
             return;
         }
 
-        if (!_packageInspector.IsInstalled)
+        var exe = _packageInspector.FindExecutable();
+        if (exe is null)
         {
             await ShowPackageInspectorMissingDialog().ConfigureAwait(true);
-            if (!_packageInspector.IsInstalled) return;
+            exe = _packageInspector.FindExecutable();
+            if (exe is null) return;
         }
 
-        var opened = await _packageInspector.OpenAsync(filePath).ConfigureAwait(true);
-        if (!opened)
+        var result = await _packageInspector.OpenAsync(filePath).ConfigureAwait(true);
+        if (result.Success)
         {
-            ShowStatus(InfoBarSeverity.Error, "Open failed", "Package Inspector couldn't open the file.");
+            // Auto-clear after a moment so the bar isn't sticky on success.
+            StatusBar.IsOpen = false;
+            return;
         }
+
+        var (severity, title) = result.FailureKind switch
+        {
+            PackageInspectorLaunchFailureKind.DefenderAsrBlock => (InfoBarSeverity.Error, "Blocked by Defender ASR"),
+            PackageInspectorLaunchFailureKind.UnsignedExecutable => (InfoBarSeverity.Error, "Inspector is unsigned"),
+            PackageInspectorLaunchFailureKind.FileMissing => (InfoBarSeverity.Warning, "Installer missing"),
+            PackageInspectorLaunchFailureKind.NotInstalled => (InfoBarSeverity.Warning, "Inspector not installed"),
+            _ => (InfoBarSeverity.Error, "Open failed"),
+        };
+        ShowStatus(severity, title, result.Detail ?? "Unknown failure.");
     }
 
     private async Task ShowPackageInspectorMissingDialog()
