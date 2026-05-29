@@ -20,6 +20,11 @@ public sealed partial class ScriptEditor : UserControl
     private bool _suppressTextChanged;
     private ScrollViewer? _editorScrollViewer;
     private int _lineCount = 1;
+    // Mirrors the RichEditBox content. When the control is unloaded (e.g. the
+    // user navigated to the Manifests tab while a script editor was hosting
+    // edits), Editor.Document throws — the cache lets the getter still return
+    // the last known text so FlushAutoSaveAsync can persist what was typed.
+    private string _cachedText = string.Empty;
 
     public event RoutedEventHandler? ScriptChanged;
 
@@ -38,23 +43,29 @@ public sealed partial class ScriptEditor : UserControl
     {
         get
         {
-            Editor.Document.GetText(TextGetOptions.None, out var text);
-            // Strip the trailing carriage return that ITextDocument always tacks on.
-            if (text.EndsWith('\r'))
+            if (TryReadDocumentText(out var text))
             {
-                text = text[..^1];
+                _cachedText = text;
+                return text;
             }
-            return text.Replace("\r", "\n", StringComparison.Ordinal);
+            return _cachedText;
         }
         set
         {
+            _cachedText = value ?? string.Empty;
             _suppressTextChanged = true;
             try
             {
-                Editor.Document.SetText(TextSetOptions.None, value ?? string.Empty);
+                Editor.Document.SetText(TextSetOptions.None, _cachedText);
                 ApplyHighlighting();
                 _lineCount = 0; // force refresh
                 UpdateLineNumbers();
+            }
+            catch
+            {
+                // RichEditBox template not yet applied. _cachedText holds the
+                // pending value; OnEditorLoaded will write it into the document
+                // and re-run highlighting once the template comes up.
             }
             finally
             {
@@ -70,6 +81,40 @@ public sealed partial class ScriptEditor : UserControl
         _highlightTimer.Interval = TimeSpan.FromMilliseconds(150);
         _highlightTimer.IsRepeating = false;
         _highlightTimer.Tick += (_, _) => ApplyHighlighting();
+        Unloaded += OnUnloaded;
+    }
+
+    private void OnUnloaded(object sender, RoutedEventArgs e)
+    {
+        // The debounce timer outlives the visual tree: if it fires after the
+        // hosting page has been navigated away from (e.g. Packages → Manifests
+        // while a 150 ms tick is pending), Editor.Document throws and the
+        // process tears down because no UnhandledException handler is wired up.
+        _highlightTimer.Stop();
+        if (_editorScrollViewer is not null)
+        {
+            _editorScrollViewer.ViewChanged -= OnEditorViewChanged;
+            _editorScrollViewer = null;
+        }
+    }
+
+    private bool TryReadDocumentText(out string text)
+    {
+        text = string.Empty;
+        try
+        {
+            Editor.Document.GetText(TextGetOptions.None, out var raw);
+            if (raw.EndsWith('\r'))
+            {
+                raw = raw[..^1];
+            }
+            text = raw.Replace("\r", "\n", StringComparison.Ordinal);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private async void OnExpandClicked(object sender, RoutedEventArgs e)
@@ -95,6 +140,13 @@ public sealed partial class ScriptEditor : UserControl
             return;
         }
 
+        // Refresh the cache on every keystroke so the getter survives later
+        // unload (auto-save reads ScriptText after the page has gone away).
+        if (TryReadDocumentText(out var current))
+        {
+            _cachedText = current;
+        }
+
         _highlightTimer.Stop();
         _highlightTimer.Start();
         UpdateLineNumbers();
@@ -104,6 +156,32 @@ public sealed partial class ScriptEditor : UserControl
     private void OnEditorLoaded(object sender, RoutedEventArgs e)
     {
         AttachInnerScrollViewer();
+        // If ScriptText was set before the RichEditBox template was applied,
+        // the setter's SetText call threw and only the cache was updated. Flush
+        // the cache now and run the initial highlight pass so the editor isn't
+        // left empty or unhighlighted on first display.
+        if (!string.IsNullOrEmpty(_cachedText))
+        {
+            _suppressTextChanged = true;
+            try
+            {
+                Editor.Document.GetText(TextGetOptions.None, out var current);
+                if (current.EndsWith('\r')) current = current[..^1];
+                if (!string.Equals(current, _cachedText, StringComparison.Ordinal))
+                {
+                    Editor.Document.SetText(TextSetOptions.None, _cachedText);
+                }
+            }
+            catch
+            {
+                // Document still not ready — give up; next setter call will retry.
+            }
+            finally
+            {
+                _suppressTextChanged = false;
+            }
+        }
+        ApplyHighlighting();
         UpdateLineNumbers();
     }
 
@@ -137,13 +215,14 @@ public sealed partial class ScriptEditor : UserControl
 
     private void UpdateLineNumbers()
     {
-        Editor.Document.GetText(TextGetOptions.None, out var text);
-        if (text.EndsWith('\r'))
+        if (!TryReadDocumentText(out var text))
         {
-            text = text[..^1];
+            return;
         }
 
-        // RichEditBox uses \r as the line break.
+        // TryReadDocumentText has already normalised RichEditBox's native \r to
+        // \n; counting either covers both this path and any future caller that
+        // might hand us un-normalised text.
         var count = 1;
         foreach (var ch in text)
         {
@@ -189,7 +268,11 @@ public sealed partial class ScriptEditor : UserControl
 
     private void ApplyHighlighting()
     {
-        if (_suppressHighlight) return;
+        // IsLoaded gates the common case (timer ticked after unload). The
+        // try/catch covers the narrow race where IsLoaded is still true but the
+        // RichEditBox template has already begun tearing down — Document throws
+        // an NRE in that window and there is no UnhandledException net below us.
+        if (_suppressHighlight || !IsLoaded) return;
         _suppressHighlight = true;
         try
         {
@@ -215,6 +298,10 @@ public sealed partial class ScriptEditor : UserControl
             }
 
             doc.Selection.SetRange(selStart, selEnd);
+        }
+        catch
+        {
+            // Editor.Document threw between IsLoaded and the actual access.
         }
         finally
         {

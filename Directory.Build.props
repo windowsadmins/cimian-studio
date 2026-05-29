@@ -16,6 +16,13 @@
     <!-- CA5392: WindowsAppSDK auto-init source ships without DefaultDllImportSearchPaths -->
     <!-- CA1305/CA1031: pedantic for UI string formatting and top-level click handlers -->
     <NoWarn>$(NoWarn);CA1716;CA1034;CA1002;CA2227;CA1003;CA1515;CA5392;CA1305;CA1031;CA1308</NoWarn>
+
+    <!-- Rewrite absolute source paths in PDBs to a stable token so shipped
+         symbols (and crash-dump stack frames from end users) don't leak the
+         build machine's user profile. The leading segment is the repo root;
+         the trailing /_/ matches the convention SourceLink uses. -->
+    <Deterministic>true</Deterministic>
+    <PathMap>$(MSBuildThisFileDirectory)=/_/</PathMap>
   </PropertyGroup>
 
   <PropertyGroup>

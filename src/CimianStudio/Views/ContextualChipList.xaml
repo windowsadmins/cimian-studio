@@ -14,6 +14,16 @@
             <Setter Property="HorizontalContentAlignment" Value="Stretch" />
             <Setter Property="Background" Value="Transparent" />
         </Style>
+        <!-- Static DataTemplate for chip context dropdowns. Declared here (parsed
+             once by the XAML compiler) instead of via XamlReader.Load per chip —
+             the runtime parser path silently terminates the process when invoked
+             many times during selection of large manifests like CoreManifest or
+             Bootstrap. -->
+        <DataTemplate x:Key="ContextOptionTemplate">
+            <TextBlock Text="{Binding Label}"
+                       TextWrapping="Wrap"
+                       MaxWidth="320" />
+        </DataTemplate>
     </UserControl.Resources>
 
     <StackPanel Spacing="6">
