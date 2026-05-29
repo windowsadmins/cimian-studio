@@ -59,7 +59,7 @@
 
             <TextBlock x:Name="AppTitleText"
                        Grid.Column="4"
-                       Text="CimianStudio"
+                       Text="Cimian Studio"
                        Style="{StaticResource CaptionTextBlockStyle}"
                        VerticalAlignment="Center" />
             <StackPanel Grid.Column="5"
@@ -130,8 +130,10 @@
             IsSettingsVisible="False"
             PaneDisplayMode="LeftCompact"
             CompactPaneLength="48"
-            OpenPaneLength="240"
+            OpenPaneLength="200"
             Loaded="OnNavViewLoaded"
+            PaneOpening="OnNavPaneOpening"
+            PaneClosing="OnNavPaneClosing"
             SelectionChanged="NavView_SelectionChanged">
 
             <muxc:NavigationView.Resources>
@@ -166,6 +168,16 @@
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE100;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
+                <muxc:NavigationViewItem x:Name="NavBuild" Tag="build" Content="Build">
+                    <muxc:NavigationViewItem.Icon>
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0EC;" />
+                    </muxc:NavigationViewItem.Icon>
+                </muxc:NavigationViewItem>
+                <muxc:NavigationViewItem x:Name="NavImport" Tag="import" Content="Import">
+                    <muxc:NavigationViewItem.Icon>
+                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0B2;" />
+                    </muxc:NavigationViewItem.Icon>
+                </muxc:NavigationViewItem>
                 <muxc:NavigationViewItem x:Name="NavGit" Tag="git" Content="Git">
                     <muxc:NavigationViewItem.Icon>
                         <!-- Placeholder. The actual icon is injected in
@@ -174,16 +186,6 @@
                              Lucide font glyph rendered visibly thinner at small
                              sizes than the title bar's 2px-stroked Path. -->
                         <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0E2;" />
-                    </muxc:NavigationViewItem.Icon>
-                </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavImport" Tag="import" Content="Import">
-                    <muxc:NavigationViewItem.Icon>
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0B2;" />
-                    </muxc:NavigationViewItem.Icon>
-                </muxc:NavigationViewItem>
-                <muxc:NavigationViewItem x:Name="NavBuild" Tag="build" Content="Build">
-                    <muxc:NavigationViewItem.Icon>
-                        <FontIcon FontFamily="ms-appx:///Assets/Fonts/lucide.ttf#lucide" Glyph="&#xE0EC;" />
                     </muxc:NavigationViewItem.Icon>
                 </muxc:NavigationViewItem>
             </muxc:NavigationView.MenuItems>

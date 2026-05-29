@@ -46,6 +46,11 @@ public sealed class CimianRepository
     public string PkgsPath => Path.Combine(RootPath, "pkgs");
 
     /// <summary>
+    /// Gets the path to the icons directory.
+    /// </summary>
+    public string IconsPath => Path.Combine(RootPath, "icons");
+
+    /// <summary>
     /// Gets or sets the total package count.
     /// </summary>
     public int PackageCount { get; set; }

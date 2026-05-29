@@ -34,15 +34,25 @@ try {
     if (-not (Test-Path $startMenuPath)) {
         New-Item -ItemType Directory -Path $startMenuPath -Force | Out-Null
     }
-    $shortcutPath = Join-Path $startMenuPath 'CimianStudio.lnk'
+    # The shortcut filename is what Windows surfaces in Start Menu and Search —
+    # use the spaced "Cimian Studio.lnk" so users see the friendly name.
+    $shortcutPath = Join-Path $startMenuPath 'Cimian Studio.lnk'
     $wshell = New-Object -ComObject WScript.Shell
     $shortcut = $wshell.CreateShortcut($shortcutPath)
     $shortcut.TargetPath = $exe
     $shortcut.WorkingDirectory = $InstallDir
-    $shortcut.Description = 'Cimian administrator dashboard — author packages, manifests, and catalogs'
+    $shortcut.Description = 'Cimian Studio — author packages, manifests, and catalogs'
     $shortcut.IconLocation = "$exe,0"
     $shortcut.Save()
     Write-Host "Installed Start Menu shortcut: $shortcutPath"
+
+    # Migrate: earlier installs created CimianStudio.lnk (no space); remove it
+    # so the user doesn't end up with both entries in Start Menu / Search.
+    $legacyShortcut = Join-Path $startMenuPath 'CimianStudio.lnk'
+    if (Test-Path $legacyShortcut) {
+        Remove-Item -Path $legacyShortcut -Force -ErrorAction SilentlyContinue
+        Write-Host "Removed legacy shortcut: $legacyShortcut"
+    }
 } catch {
     Write-Warning "Failed to create Start Menu shortcut: $_"
 }

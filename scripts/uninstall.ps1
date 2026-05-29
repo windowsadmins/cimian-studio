@@ -26,10 +26,14 @@ try {
 # Start Menu doesn't show an empty Cimian group.
 try {
     $startMenuPath = 'C:\ProgramData\Microsoft\Windows\Start Menu\Programs\Cimian'
-    $shortcutPath = Join-Path $startMenuPath 'CimianStudio.lnk'
-    if (Test-Path $shortcutPath) {
-        Remove-Item -Path $shortcutPath -Force -ErrorAction Stop
-        Write-Host "Removed Start Menu shortcut: $shortcutPath"
+    # Remove both the current "Cimian Studio.lnk" and the legacy
+    # "CimianStudio.lnk" so a clean uninstall covers either install vintage.
+    foreach ($linkName in @('Cimian Studio.lnk', 'CimianStudio.lnk')) {
+        $shortcutPath = Join-Path $startMenuPath $linkName
+        if (Test-Path $shortcutPath) {
+            Remove-Item -Path $shortcutPath -Force -ErrorAction Stop
+            Write-Host "Removed Start Menu shortcut: $shortcutPath"
+        }
     }
     if ((Test-Path $startMenuPath) -and -not (Get-ChildItem -Path $startMenuPath -Force -ErrorAction SilentlyContinue)) {
         Remove-Item -Path $startMenuPath -Force -ErrorAction Stop
