@@ -41,6 +41,68 @@ public sealed class GitService : IGitService
         return Task.Run(() => StageCore(info, paths), cancellationToken);
     }
 
+    public Task<GitSimpleResult> DiscardFilesAsync(GitRepositoryInfo info, IEnumerable<GitStatusEntry> entries, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentNullException.ThrowIfNull(entries);
+        var list = entries.ToList();
+        return Task.Run(() =>
+        {
+            var output = new StringBuilder();
+            var anyFailed = false;
+
+            // Bucket entries into "untracked → delete from disk" and
+            // "tracked → git restore". Issuing them in two batches keeps the
+            // process spawn count down for repos with lots of dirty files.
+            var untracked = new List<string>();
+            var tracked = new List<string>();
+            foreach (var entry in list)
+            {
+                if (string.IsNullOrEmpty(entry.RelativePath)) continue;
+                if (entry.Status == GitFileStatus.Untracked)
+                {
+                    untracked.Add(entry.RelativePath);
+                }
+                else
+                {
+                    tracked.Add(entry.RelativePath);
+                }
+            }
+
+            foreach (var rel in untracked)
+            {
+                try
+                {
+                    var abs = Path.Combine(info.GitRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+                    if (File.Exists(abs))
+                    {
+                        File.Delete(abs);
+                        output.AppendLine($"deleted {rel}");
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    anyFailed = true;
+                    output.AppendLine($"failed to delete {rel}: {ex.Message}");
+                }
+            }
+
+            if (tracked.Count > 0)
+            {
+                // git restore --staged --worktree -- <paths…>
+                // Resets both the index and the working tree to HEAD for the
+                // given paths. Single git invocation covers any number of files.
+                var args = new List<string> { "restore", "--staged", "--worktree", "--" };
+                args.AddRange(tracked);
+                var (code, out_) = RunGit(info.GitRoot, args);
+                if (!string.IsNullOrEmpty(out_)) output.AppendLine(out_);
+                if (code != 0) anyFailed = true;
+            }
+
+            return new GitSimpleResult(!anyFailed, output.ToString().TrimEnd());
+        }, cancellationToken);
+    }
+
     public Task<GitCommitResult> CommitAsync(GitRepositoryInfo info, string subject, string? body, bool runHooks, bool amend = false, IProgress<string>? progress = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);
@@ -128,10 +190,221 @@ public sealed class GitService : IGitService
         return Task.Run(() => CheckoutBranchCore(info, branchName), cancellationToken);
     }
 
-    public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default)
+    public Task<GitSimpleResult> DeleteBranchAsync(GitRepositoryInfo info, string branchName, bool force = false, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);
-        return Task.Run<IReadOnlyList<GitCommit>>(() => GetHistoryCore(info, limit), cancellationToken);
+        ArgumentException.ThrowIfNullOrWhiteSpace(branchName);
+        return Task.Run(() =>
+        {
+            // -d refuses unmerged branches; -D drops them anyway. The caller
+            // confirms before passing force=true, so we trust the choice.
+            var flag = force ? "-D" : "-d";
+            var (code, output) = RunGit(info.GitRoot, ["branch", flag, branchName]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> RenameBranchAsync(GitRepositoryInfo info, string oldName, string newName, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(oldName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(newName);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["branch", "-m", oldName, newName]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashAsync(GitRepositoryInfo info, string? message = null, bool includeUntracked = true, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        return Task.Run(() =>
+        {
+            var args = new List<string> { "stash", "push" };
+            if (includeUntracked) args.Add("--include-untracked");
+            if (!string.IsNullOrWhiteSpace(message))
+            {
+                args.Add("-m");
+                args.Add(message);
+            }
+            var (code, output) = RunGit(info.GitRoot, args);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<GitStashEntry>> GetStashesAsync(GitRepositoryInfo info, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        return Task.Run<IReadOnlyList<GitStashEntry>>(() =>
+        {
+            // %gd → stash@{N} reference; %ai → ISO timestamp; %gs → stash subject.
+            // Tab-separated so we can split with a single delimiter; subjects never
+            // contain raw tabs (git collapses whitespace in the reflog subject).
+            var (code, output) = RunGit(info.GitRoot,
+                ["stash", "list", "--pretty=format:%gd\t%ai\t%gs"]);
+            if (code != 0 || string.IsNullOrWhiteSpace(output))
+            {
+                return [];
+            }
+
+            var entries = new List<GitStashEntry>();
+            foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                var parts = line.Split('\t', 3);
+                if (parts.Length < 3) continue;
+
+                var reference = parts[0].Trim();
+                var when = DateTimeOffset.TryParse(parts[1].Trim(), CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var parsed)
+                    ? parsed
+                    : DateTimeOffset.MinValue;
+                var subject = parts[2].Trim();
+
+                // Subject is conventionally "WIP on <branch>: <sha> <commit-subject>"
+                // or "On <branch>: <message>" when the user supplied -m.
+                var branch = ExtractBranchFromStashSubject(subject);
+                entries.Add(new GitStashEntry(reference, branch, subject, when));
+            }
+            return entries;
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Pulls the branch name out of git's stash subject format. Falls back to
+    /// empty string when the subject is in an unexpected shape.
+    /// </summary>
+    private static string ExtractBranchFromStashSubject(string subject)
+    {
+        // Patterns:
+        //   "WIP on <branch>: <sha> <subject>"
+        //   "On <branch>: <user-message>"
+        const string wipPrefix = "WIP on ";
+        const string onPrefix = "On ";
+        string remainder;
+        if (subject.StartsWith(wipPrefix, StringComparison.Ordinal))
+        {
+            remainder = subject[wipPrefix.Length..];
+        }
+        else if (subject.StartsWith(onPrefix, StringComparison.Ordinal))
+        {
+            remainder = subject[onPrefix.Length..];
+        }
+        else
+        {
+            return string.Empty;
+        }
+        var colon = remainder.IndexOf(':', StringComparison.Ordinal);
+        return colon > 0 ? remainder[..colon] : remainder;
+    }
+
+    public Task<GitSimpleResult> StashApplyAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "apply", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashPopAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "pop", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> StashDropAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(stashReference);
+        return Task.Run(() =>
+        {
+            var (code, output) = RunGit(info.GitRoot, ["stash", "drop", stashReference]);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    public Task<GitSimpleResult> ApplyPatchAsync(GitRepositoryInfo info, string patchText, bool cached, bool reverse, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        ArgumentException.ThrowIfNullOrWhiteSpace(patchText);
+        return Task.Run(() =>
+        {
+            var args = new List<string> { "apply" };
+            if (cached) args.Add("--cached");
+            if (reverse) args.Add("--reverse");
+            // --recount makes git tolerate slightly off line counts in the
+            // synthesized hunk header. --whitespace=nowarn silences CR/LF +
+            // trailing-whitespace nags that aren't actionable here.
+            args.Add("--recount");
+            args.Add("--whitespace=nowarn");
+            args.Add("-");
+            // Normalise to LF-only — git apply on Windows reads CR as part of
+            // the previous line's content, so a CRLF patch trips the hunk
+            // header parser with "unexpected line: ?" / "corrupt patch".
+            var lfPatch = patchText.Replace("\r\n", "\n", StringComparison.Ordinal)
+                                   .Replace("\r", "\n", StringComparison.Ordinal);
+            var (code, output) = RunGitWithStdin(info.GitRoot, args, lfPatch);
+            return new GitSimpleResult(code == 0, output);
+        }, cancellationToken);
+    }
+
+    /// <summary>
+    /// Variant of <see cref="RunGit"/> that pipes <paramref name="stdin"/> to
+    /// the child <c>git</c> process. Used by <see cref="ApplyPatchAsync"/> to
+    /// hand <c>git apply</c> a single-hunk patch over stdin instead of writing
+    /// a temp file.
+    /// </summary>
+    private static (int ExitCode, string Output) RunGitWithStdin(string workingDir, IEnumerable<string> args, string stdin)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = "git",
+            WorkingDirectory = workingDir,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        foreach (var arg in args) psi.ArgumentList.Add(arg);
+
+        using var proc = new Process { StartInfo = psi };
+        try
+        {
+            if (!proc.Start())
+            {
+                return (-1, "git failed to start");
+            }
+            // Patch text uses LF endings — git apply is sensitive to CR/LF.
+            proc.StandardInput.NewLine = "\n";
+            proc.StandardInput.Write(stdin);
+            if (!stdin.EndsWith('\n')) proc.StandardInput.Write('\n');
+            proc.StandardInput.Close();
+
+            var stdout = proc.StandardOutput.ReadToEnd();
+            var stderr = proc.StandardError.ReadToEnd();
+            proc.WaitForExit();
+
+            var output = string.Concat(stdout, stderr).TrimEnd();
+            return (proc.ExitCode, output);
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            return (-1, $"git not found on PATH: {ex.Message}");
+        }
+    }
+
+    public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, int skip = 0, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(info);
+        return Task.Run<IReadOnlyList<GitCommit>>(() => GetHistoryCore(info, limit, skip), cancellationToken);
     }
 
     public Task<string> GetCommitDiffAsync(GitRepositoryInfo info, string sha, CancellationToken cancellationToken = default)
@@ -549,12 +822,13 @@ public sealed class GitService : IGitService
             using var repo = new Repository(info.GitRoot);
             var status = repo.RetrieveStatus(relativePath);
 
-            // Untracked: show the file contents prefixed with "+ " (capped to keep huge
-            // binaries from blowing up the UI).
+            // Untracked: synthesize a proper unified diff with /dev/null as the
+            // source so the structured renderer treats it as one all-added
+            // hunk (and per-hunk Stage / Discard work on it too).
             if ((status & FileStatus.NewInWorkdir) != 0 && (status & FileStatus.NewInIndex) == 0)
             {
                 var abs = Path.GetFullPath(Path.Combine(info.GitRoot, relativePath));
-                return RenderUntrackedFile(abs);
+                return RenderUntrackedFile(abs, relativePath);
             }
 
             var options = new CompareOptions
@@ -577,14 +851,20 @@ public sealed class GitService : IGitService
         }
     }
 
-    private static string RenderUntrackedFile(string absolutePath)
+    private static string RenderUntrackedFile(string absolutePath, string relativePath)
     {
         const int maxBytes = 64 * 1024; // 64 KB cap for the diff panel.
         try
         {
             var info = new FileInfo(absolutePath);
             if (!info.Exists) return "(file no longer exists)";
-            if (info.Length == 0) return "(new file, empty)";
+            if (info.Length == 0)
+            {
+                // Even an empty new file gets a real diff envelope so the
+                // structured renderer shows the file card with a zero-hunk
+                // summary, not a fallback text blob.
+                return BuildEmptyNewFilePatch(relativePath);
+            }
             if (LooksBinary(absolutePath)) return $"(new binary file, {info.Length:N0} bytes)";
 
             var bytesToRead = (int)Math.Min(info.Length, maxBytes);
@@ -593,20 +873,69 @@ public sealed class GitService : IGitService
             var read = stream.Read(buffer, 0, bytesToRead);
             var text = System.Text.Encoding.UTF8.GetString(buffer, 0, read);
 
-            var sb = new StringBuilder(text.Length + 128);
-            sb.Append("(new file: ").Append(Path.GetFileName(absolutePath)).Append(", ")
-              .Append(info.Length.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)).AppendLine(" bytes)");
-            foreach (var line in text.Split('\n'))
+            // Normalise to LF — the parser handles CRLF but the patch we
+            // emit reads cleaner without stray \r at line ends.
+            var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+
+            // Trailing newline behaviour: if the file ends with a newline the
+            // split produces an empty final element; drop it so we don't emit
+            // a phantom "+" line. If it does NOT end in a newline we need to
+            // emit the "\ No newline at end of file" trailer per git format.
+            var endedWithNewline = text.EndsWith('\n');
+            var emitLines = endedWithNewline && lines.Length > 0 && string.IsNullOrEmpty(lines[^1])
+                ? lines[..^1]
+                : lines;
+
+            // Forward-slash form for the diff envelope — git's own diff output
+            // uses POSIX separators even on Windows.
+            var slashPath = relativePath.Replace('\\', '/');
+
+            // Hunk header line count must include any UI-hint context line we
+            // append for truncation, otherwise the patch body is one line
+            // longer than the declared count and Stage Chunk silently re-uses
+            // the wrong region of the file (UnifiedDiffParser tolerantly
+            // accepts the trailing line as context, but `git apply` rejects).
+            var truncated = info.Length > maxBytes;
+            var hunkLineCount = emitLines.Length + (truncated ? 1 : 0);
+
+            var sb = new StringBuilder(text.Length + 256);
+            sb.Append("diff --git a/").Append(slashPath).Append(" b/").Append(slashPath).Append('\n');
+            sb.Append("new file mode 100644\n");
+            sb.Append("index 0000000..0000000\n");
+            sb.Append("--- /dev/null\n");
+            sb.Append("+++ b/").Append(slashPath).Append('\n');
+            sb.Append("@@ -0,0 +1,").Append(hunkLineCount).Append(" @@\n");
+            foreach (var line in emitLines)
             {
-                sb.Append("+ ").Append(line.TrimEnd('\r')).Append('\n');
+                sb.Append('+').Append(line).Append('\n');
             }
-            if (info.Length > maxBytes) sb.AppendLine("…(truncated)");
+            if (!endedWithNewline)
+            {
+                sb.Append("\\ No newline at end of file\n");
+            }
+            if (truncated)
+            {
+                // Mark the truncation as a context line so the renderer doesn't
+                // mistake it for an added line — it's a UI hint, not real content.
+                sb.Append(" …(truncated, file is ").Append(info.Length.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)).Append(" bytes)\n");
+            }
             return sb.ToString();
         }
         catch (IOException ex)
         {
             return $"(failed to read new file: {ex.Message})";
         }
+    }
+
+    private static string BuildEmptyNewFilePatch(string relativePath)
+    {
+        var slashPath = relativePath.Replace('\\', '/');
+        return
+            $"diff --git a/{slashPath} b/{slashPath}\n" +
+            "new file mode 100644\n" +
+            "index 0000000..0000000\n" +
+            "--- /dev/null\n" +
+            $"+++ b/{slashPath}\n";
     }
 
     private static bool LooksBinary(string path)
@@ -715,16 +1044,20 @@ public sealed class GitService : IGitService
     private const char FieldSep = '\x1f';
     private const char RecordSep = '\x1e';
 
-    private static List<GitCommit> GetHistoryCore(GitRepositoryInfo info, int limit)
+    private static List<GitCommit> GetHistoryCore(GitRepositoryInfo info, int limit, int skip = 0)
     {
         if (limit <= 0) return [];
 
         // %H=full sha, %an=author name, %ae=author email, %aI=ISO8601 author date,
         // %P=parent shas (space-separated), %D=ref names, %s=subject
         var format = $"%H{FieldSep}%an{FieldSep}%ae{FieldSep}%aI{FieldSep}%P{FieldSep}%D{FieldSep}%s{RecordSep}";
-        var (code, output) = RunGit(info.GitRoot,
-            ["log", "--all", "--topo-order", "--decorate=full",
-             $"--max-count={limit}", $"--pretty=format:{format}"]);
+        var args = new List<string>
+        {
+            "log", "--all", "--topo-order", "--decorate=full",
+            $"--max-count={limit}", $"--pretty=format:{format}",
+        };
+        if (skip > 0) args.Add($"--skip={skip}");
+        var (code, output) = RunGit(info.GitRoot, args);
 
         if (code != 0 || string.IsNullOrEmpty(output)) return [];
 
