@@ -167,21 +167,16 @@ public sealed partial class ContextualChipList : UserControl
         // Cap the context dropdown so a long conditional predicate (e.g.
         // `hostname CONTAINS "X" OR machine_model CONTAINS "Y" OR ...`) can't
         // push the chip wider than the row. MaxWidth + wrapping ItemTemplate
-        // lets long predicates wrap to multiple lines inside the chip.
+        // lets long predicates wrap to multiple lines inside the chip. The
+        // template comes from the compiled XAML resource — XamlReader.Load on
+        // the hot chip-construction path silently terminates the process when
+        // a manifest like CoreManifest or Bootstrap rebuilds many chips at once.
         var contextBox = new ComboBox
         {
             MinWidth = 180,
             MaxWidth = 360,
             VerticalAlignment = VerticalAlignment.Center,
-            ItemTemplate = (DataTemplate)Microsoft.UI.Xaml.Markup.XamlReader.Load(
-                """
-                <DataTemplate xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                              xmlns:opt="using:CimianStudio.Views">
-                  <TextBlock Text="{Binding Label}"
-                             TextWrapping="Wrap"
-                             MaxWidth="320" />
-                </DataTemplate>
-                """),
+            ItemTemplate = (DataTemplate)Resources["ContextOptionTemplate"],
         };
         Grid.SetColumn(contextBox, 2);
         grid.Children.Add(contextBox);
