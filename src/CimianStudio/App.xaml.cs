@@ -48,6 +48,7 @@ public partial class App : Application
                 services.AddSingleton<IBuildService, BuildService>();
                 services.AddSingleton<IImportSettingsService, ImportSettingsService>();
                 services.AddSingleton<ICimiimportService, CimiimportService>();
+                services.AddSingleton<IPackageInspectorService, PackageInspectorService>();
 
                 services.AddSingleton<MainViewModel>();
                 // The browser ViewModels (Packages / Icons / Categories /
