@@ -5,66 +5,84 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Page.Resources>
-        <DataTemplate x:Key="RecentRowTemplate" x:DataType="x:String">
-            <TextBlock Text="{x:Bind}" TextTrimming="CharacterEllipsis" Padding="4,2,4,2" />
+        <!-- Tight key-value row used in the leaderboard lists (orphans, largest,
+             top devs/cats, recents, commits). Keeps everything to a single line
+             with the label trimming and a right-aligned value. -->
+        <DataTemplate x:Key="RowLabelValueTemplate" x:DataType="x:String">
+            <TextBlock Text="{x:Bind}" TextTrimming="CharacterEllipsis" Padding="0,3,0,3" />
         </DataTemplate>
+
+        <!-- A single metric "card": small caption above a big number. Used 5-up
+             in the stat rows below. -->
+        <Style x:Key="MetricCardStyle" TargetType="Border" BasedOn="{StaticResource CardStyle}">
+            <Setter Property="Padding" Value="14,10,14,10" />
+            <Setter Property="MinWidth" Value="148" />
+        </Style>
     </Page.Resources>
 
     <ScrollViewer>
-        <Grid Padding="32" RowSpacing="20">
+        <Grid Padding="24,16,24,24" RowSpacing="14">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
-                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />  <!-- 0: header (name+path) + search -->
+                <RowDefinition Height="Auto" />  <!-- 1: search results -->
+                <RowDefinition Height="Auto" />  <!-- 2: top section (Repository | Health+Activity) -->
+                <RowDefinition Height="Auto" />  <!-- 3: Recent commits -->
+                <RowDefinition Height="Auto" />  <!-- 4: recents (pkginfo / manifests) -->
+                <RowDefinition Height="Auto" />  <!-- 5: orphans / largest -->
+                <RowDefinition Height="Auto" />  <!-- 6: top devs / top cats -->
+                <RowDefinition Height="Auto" />  <!-- 7: git status -->
+                <RowDefinition Height="Auto" />  <!-- 8: validate button + bar -->
+                <RowDefinition Height="Auto" />  <!-- 9: validation details -->
             </Grid.RowDefinitions>
 
-            <StackPanel Grid.Row="0" Spacing="4">
-                <TextBlock
-                    x:Name="RepoNameText"
-                    Style="{StaticResource TitleLargeTextBlockStyle}" />
-                <TextBlock
-                    x:Name="RepoPathText"
-                    Style="{StaticResource BodyTextBlockStyle}"
-                    Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                    TextWrapping="Wrap" />
-            </StackPanel>
-
-            <Grid Grid.Row="1" ColumnSpacing="12">
+            <!-- Row 0: title + path on left, search on right -->
+            <Grid Grid.Row="0" ColumnSpacing="16">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="360" />
                 </Grid.ColumnDefinitions>
-                <TextBox Grid.Column="0"
-                         x:Name="SearchBox"
-                         PlaceholderText="Search packages and manifests content"
-                         TextChanged="OnSearchTextChanged" />
-                <Border Grid.Column="1"
-                        x:Name="IndexingPill"
-                        Visibility="Collapsed"
-                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                        BorderThickness="1"
-                        CornerRadius="10"
-                        Padding="10,4,10,4"
-                        VerticalAlignment="Center">
-                    <TextBlock x:Name="IndexingPillText"
+                <StackPanel Grid.Column="0" Spacing="2" VerticalAlignment="Center">
+                    <TextBlock x:Name="RepoNameText" Style="{StaticResource TitleTextBlockStyle}" />
+                    <TextBlock x:Name="RepoPathText"
                                Style="{StaticResource CaptionTextBlockStyle}"
-                               Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                </Border>
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                               TextWrapping="NoWrap"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+                <Grid Grid.Column="1" VerticalAlignment="Center" ColumnSpacing="8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0"
+                             x:Name="SearchBox"
+                             PlaceholderText="Search the repo"
+                             TextChanged="OnSearchTextChanged" />
+                    <Border Grid.Column="1"
+                            x:Name="IndexingPill"
+                            Visibility="Collapsed"
+                            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                            BorderThickness="1"
+                            CornerRadius="10"
+                            Padding="8,3,8,3"
+                            VerticalAlignment="Center">
+                        <TextBlock x:Name="IndexingPillText"
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                    </Border>
+                </Grid>
             </Grid>
 
-            <Border Grid.Row="2"
+            <!-- Row 1: search results (only visible when there's a live query) -->
+            <Border Grid.Row="1"
                     x:Name="SearchResultsCard"
                     Visibility="Collapsed"
-                    Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16"
-                    Padding="20,12,20,12">
-                <StackPanel Spacing="8">
+                    Style="{StaticResource CardStyle}"
+                    Shadow="{StaticResource CardShadow}"
+                    Translation="0,0,16"
+                    Padding="16,10,16,10">
+                <StackPanel Spacing="6">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />
@@ -83,38 +101,144 @@
                               SelectionMode="None"
                               IsItemClickEnabled="True"
                               ItemClick="OnSearchResultClicked"
-                              MaxHeight="360" />
+                              MaxHeight="320" />
                 </StackPanel>
             </Border>
 
-            <ItemsControl
-                Grid.Row="3"
-                x:Name="StatsHost">
-                <ItemsControl.ItemsPanel>
-                    <ItemsPanelTemplate>
-                        <StackPanel Orientation="Horizontal" Spacing="16" />
-                    </ItemsPanelTemplate>
-                </ItemsControl.ItemsPanel>
-            </ItemsControl>
+            <!-- Row 2: top section — Repository on the left, Health Check & Activity on the right.
+                 Outer grid is a 50/50 split (Width="*" / "*"), and each metric row is a 5-column
+                 *uniform* grid so the cards auto-resize to fill the available width and every card
+                 across both halves ends up the same size. Rows never wrap — they just shrink.
+                 At narrow window widths the VisualStateManager block below promotes the right
+                 column to a second row underneath the left column instead of letting the cards
+                 squeeze to the point of needing to truncate with `...`. -->
+            <!-- The two-column / stacked layout swap is driven from code-behind
+                 via Page.SizeChanged — AdaptiveTrigger inside a sub-Grid like
+                 this doesn't fire reliably in WinUI 3 desktop apps; the Page
+                 width-trigger is more dependable. -->
+            <Grid x:Name="TopSection" Grid.Row="2" ColumnSpacing="20" RowSpacing="14">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
 
-            <Grid Grid.Row="4" ColumnSpacing="16">
+                <!-- Left: Repository -->
+                <StackPanel x:Name="LeftSection" Grid.Row="0" Grid.Column="0" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Viewbox Width="18" Height="18" VerticalAlignment="Center">
+                            <!-- Lucide package -->
+                            <Path Width="24" Height="24"
+                                  Style="{StaticResource LucidePath}"
+                                  Data="M16.5,9.4 L7.55,4.24 M21,16 V8 A2,2 0 0 0 20,6.27 L13,2.27 A2,2 0 0 0 11,2.27 L4,6.27 A2,2 0 0 0 3,8 V16 A2,2 0 0 0 4,17.73 L11,21.73 A2,2 0 0 0 13,21.73 L20,17.73 A2,2 0 0 0 21,16 Z M3.27,6.96 L12,12.01 L20.73,6.96 M12,22.08 V12" />
+                        </Viewbox>
+                        <TextBlock Text="Repository" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    </StackPanel>
+                    <Grid x:Name="StatsRowA" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                    <Grid x:Name="StatsRowB" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </StackPanel>
+
+                <!-- Right: Health Check & Activity. Grid.Row / Grid.Column are
+                     remapped by the VisualStateManager above when window width drops. -->
+                <StackPanel x:Name="RightSection" Grid.Row="0" Grid.Column="1" Spacing="10">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Viewbox Width="18" Height="18" VerticalAlignment="Center">
+                            <!-- Lucide activity (heart-rate line) -->
+                            <Path Width="24" Height="24"
+                                  Style="{StaticResource LucidePath}"
+                                  Data="M22,12 H18 L15,21 L9,3 L6,12 H2" />
+                        </Viewbox>
+                        <TextBlock Text="Health Check &amp; Activity" Style="{StaticResource SubtitleTextBlockStyle}" />
+                    </StackPanel>
+                    <Grid x:Name="HealthRow" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                    <Grid x:Name="ActivityRow" ColumnSpacing="12">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                    </Grid>
+                </StackPanel>
+            </Grid>
+
+            <!-- Row 9: Recent commits -->
+            <Border Grid.Row="3"
+                    x:Name="RecentCommitsCard"
+                    Style="{StaticResource CardStyle}"
+                    Shadow="{StaticResource CardShadow}"
+                    Translation="0,0,16"
+                    Padding="16,12,16,12"
+                    Visibility="Collapsed">
+                <StackPanel Spacing="6">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Viewbox Width="14" Height="14" VerticalAlignment="Center">
+                            <Path Width="24" Height="24"
+                                  Style="{StaticResource LucidePath}"
+                                  Data="M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18" />
+                        </Viewbox>
+                        <TextBlock Text="Recent commits" Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock x:Name="RecentCommitsBranchText"
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ListView x:Name="RecentCommitsList"
+                              SelectionMode="None"
+                              IsItemClickEnabled="True"
+                              ItemClick="OnRecentCommitClicked" />
+                </StackPanel>
+            </Border>
+
+            <!-- Row 4: recents (packages / manifests) — compact 2-col -->
+            <Grid Grid.Row="4" ColumnSpacing="12">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
                 <Border Grid.Column="0"
-                        Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16"
-                        Padding="20,16,20,12">
-                    <StackPanel Spacing="8">
-                        <TextBlock Text="Recently modified pkginfo"
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Recently modified packages"
                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
                         <ListView x:Name="RecentPackagesList"
                                   SelectionMode="None"
                                   IsItemClickEnabled="True"
                                   ItemClick="OnRecentPackageClicked"
-                                  MaxHeight="220"
-                                  ItemTemplate="{StaticResource RecentRowTemplate}" />
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
                         <TextBlock x:Name="NoRecentPackagesText"
                                    Text="No recently modified packages."
                                    Style="{StaticResource CaptionTextBlockStyle}"
@@ -124,17 +248,19 @@
                 </Border>
 
                 <Border Grid.Column="1"
-                        Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16"
-                        Padding="20,16,20,12">
-                    <StackPanel Spacing="8">
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
                         <TextBlock Text="Recently modified manifests"
                                    Style="{StaticResource BodyStrongTextBlockStyle}" />
                         <ListView x:Name="RecentManifestsList"
                                   SelectionMode="None"
                                   IsItemClickEnabled="True"
                                   ItemClick="OnRecentManifestClicked"
-                                  MaxHeight="220"
-                                  ItemTemplate="{StaticResource RecentRowTemplate}" />
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
                         <TextBlock x:Name="NoRecentManifestsText"
                                    Text="No recently modified manifests."
                                    Style="{StaticResource CaptionTextBlockStyle}"
@@ -144,11 +270,127 @@
                 </Border>
             </Grid>
 
-            <Border Grid.Row="5"
+            <!-- Row 5: orphans / largest -->
+            <Grid Grid.Row="5" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="Orphan packages"
+                                       Style="{StaticResource BodyStrongTextBlockStyle}" />
+                            <TextBlock x:Name="OrphansCountText"
+                                       Style="{StaticResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="Not referenced by any manifest's install / uninstall / featured / default / optional list."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <ListView x:Name="OrphansList"
+                                  SelectionMode="None"
+                                  IsItemClickEnabled="True"
+                                  ItemClick="OnOrphanClicked"
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
+                        <TextBlock x:Name="OrphansEmpty"
+                                   Text="None — every package is referenced by a manifest."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1"
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Largest packages"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   Text="Top 10 by installer size." />
+                        <ListView x:Name="LargestList"
+                                  SelectionMode="None"
+                                  IsItemClickEnabled="True"
+                                  ItemClick="OnLargestClicked"
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
+                        <TextBlock x:Name="LargestEmpty"
+                                   Text="No installer sizes recorded yet."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Row 6: top devs / top cats -->
+            <Grid Grid.Row="6" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Grid.Column="0"
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Top developers"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ListView x:Name="TopDevelopersList"
+                                  SelectionMode="None"
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
+                        <TextBlock x:Name="TopDevelopersEmpty"
+                                   Text="No developers yet."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1"
+                        Style="{StaticResource CardStyle}"
+                        Shadow="{StaticResource CardShadow}"
+                        Translation="0,0,16"
+                        Padding="16,12,16,12">
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Top categories"
+                                   Style="{StaticResource BodyStrongTextBlockStyle}" />
+                        <ListView x:Name="TopCategoriesList"
+                                  SelectionMode="None"
+                                  MaxHeight="180"
+                                  ItemTemplate="{StaticResource RowLabelValueTemplate}" />
+                        <TextBlock x:Name="TopCategoriesEmpty"
+                                   Text="No categories yet."
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorTertiaryBrush}"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <!-- Row 7: git status (kept from before) -->
+            <Border Grid.Row="7"
                     x:Name="GitStatusCard"
                     Visibility="Collapsed"
-                    Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16"
-                    Padding="20,12,12,12">
+                    Style="{StaticResource CardStyle}"
+                    Shadow="{StaticResource CardShadow}"
+                    Translation="0,0,16"
+                    Padding="16,10,12,10">
                 <Grid ColumnSpacing="8">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
@@ -168,19 +410,23 @@
                 </Grid>
             </Border>
 
-            <Button
-                Grid.Row="6"
-                Content="Validate repository"
-                Click="OnValidateClicked"
-                HorizontalAlignment="Left" />
+            <!-- Row 8: validate -->
+            <Grid Grid.Row="8" ColumnSpacing="12">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button Grid.Column="0"
+                        Content="Validate repository"
+                        Click="OnValidateClicked" />
+                <InfoBar Grid.Column="1"
+                         x:Name="ValidationBar"
+                         IsClosable="False"
+                         IsOpen="False" />
+            </Grid>
 
-            <InfoBar
-                Grid.Row="7"
-                x:Name="ValidationBar"
-                IsClosable="False"
-                IsOpen="False" />
-
-            <ScrollViewer Grid.Row="8" MaxHeight="240">
+            <!-- Row 9: validation details -->
+            <ScrollViewer Grid.Row="9" MaxHeight="180">
                 <ItemsControl x:Name="ValidationDetails">
                     <ItemsControl.ItemTemplate>
                         <DataTemplate x:DataType="x:String">
