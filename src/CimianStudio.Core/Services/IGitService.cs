@@ -33,6 +33,13 @@ public interface IGitService
     Task StageAsync(GitRepositoryInfo info, IEnumerable<string> relativePaths, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Discards working-tree changes for the supplied paths. Tracked files are
+    /// reverted to HEAD via <c>git restore --staged --worktree</c>; untracked
+    /// files are deleted from disk. Destructive — callers should confirm first.
+    /// </summary>
+    Task<GitSimpleResult> DiscardFilesAsync(GitRepositoryInfo info, IEnumerable<GitStatusEntry> entries, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates a new commit. Shells out to <c>git.exe</c> so hooks fire by default;
     /// pass <paramref name="runHooks"/> = false to add <c>--no-verify</c>.
     /// </summary>
@@ -74,10 +81,50 @@ public interface IGitService
     Task<GitCheckoutResult> CheckoutBranchAsync(GitRepositoryInfo info, string branchName, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the commit history for all branches (topo-order), enriched with
-    /// parent SHAs and ref decorations for graph and badge rendering.
+    /// Deletes a local branch. <paramref name="force"/> = true passes <c>-D</c>
+    /// (drops unmerged branches); otherwise <c>-d</c> (refuses unmerged).
     /// </summary>
-    Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default);
+    Task<GitSimpleResult> DeleteBranchAsync(GitRepositoryInfo info, string branchName, bool force = false, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Renames a local branch. Maps to <c>git branch -m &lt;old&gt; &lt;new&gt;</c>.
+    /// </summary>
+    Task<GitSimpleResult> RenameBranchAsync(GitRepositoryInfo info, string oldName, string newName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pushes the current working tree + index to a new stash entry. Maps to
+    /// <c>git stash push -m &lt;message&gt; --include-untracked</c>. Empty message
+    /// → git uses its default "WIP on …" auto-message.
+    /// </summary>
+    Task<GitSimpleResult> StashAsync(GitRepositoryInfo info, string? message = null, bool includeUntracked = true, CancellationToken cancellationToken = default);
+
+    /// <summary>Lists every stash entry currently on <c>refs/stash</c>.</summary>
+    Task<IReadOnlyList<GitStashEntry>> GetStashesAsync(GitRepositoryInfo info, CancellationToken cancellationToken = default);
+
+    /// <summary>Applies <paramref name="stashReference"/> on top of the current working tree without dropping it.</summary>
+    Task<GitSimpleResult> StashApplyAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default);
+
+    /// <summary>Applies <paramref name="stashReference"/> and drops it on success.</summary>
+    Task<GitSimpleResult> StashPopAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default);
+
+    /// <summary>Drops the named stash entry without applying it.</summary>
+    Task<GitSimpleResult> StashDropAsync(GitRepositoryInfo info, string stashReference, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Pipes <paramref name="patchText"/> to <c>git apply</c> with optional
+    /// <c>--cached</c> and <c>--reverse</c> flags. Powers per-hunk Stage
+    /// (cached=true, reverse=false) and Discard (cached=false, reverse=true)
+    /// in the diff viewer.
+    /// </summary>
+    Task<GitSimpleResult> ApplyPatchAsync(GitRepositoryInfo info, string patchText, bool cached, bool reverse, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the commit history for all branches (topo-order), enriched with
+    /// parent SHAs and ref decorations for graph and badge rendering. The
+    /// optional <paramref name="skip"/> lets callers page through history
+    /// without re-walking the entire log each time they want the next slice.
+    /// </summary>
+    Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, int skip = 0, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the unified-diff text for a commit (diff against its first parent).

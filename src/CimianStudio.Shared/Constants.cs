@@ -6,9 +6,12 @@ namespace CimianStudio.Shared;
 public static class Constants
 {
     /// <summary>
-    /// Application name.
+    /// Application name. User-facing — shows in the title bar, About dialog,
+    /// and anywhere we surface the product to a human. The on-disk paths
+    /// (Program Files folder, EXE filename, namespace) deliberately stay
+    /// compact as "CimianStudio".
     /// </summary>
-    public const string AppName = "CimianStudio";
+    public const string AppName = "Cimian Studio";
 
     /// <summary>
     /// Application version.
