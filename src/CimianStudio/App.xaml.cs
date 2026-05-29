@@ -40,6 +40,7 @@ public partial class App : Application
                 services.AddSingleton<IPackageService, PackageService>();
                 services.AddSingleton<IManifestService, ManifestService>();
                 services.AddSingleton<ICatalogService, CatalogService>();
+                services.AddSingleton<IIconService, IconService>();
                 services.AddSingleton<IGitService, GitService>();
                 services.AddSingleton<ISearchService, SearchService>();
                 services.AddSingleton<ISessionState, EditorSessionState>();
@@ -47,11 +48,22 @@ public partial class App : Application
                 services.AddSingleton<IBuildService, BuildService>();
                 services.AddSingleton<IImportSettingsService, ImportSettingsService>();
                 services.AddSingleton<ICimiimportService, CimiimportService>();
+                services.AddSingleton<IPackageInspectorService, PackageInspectorService>();
 
                 services.AddSingleton<MainViewModel>();
-                services.AddTransient<PackagesViewModel>();
+                // The browser ViewModels (Packages / Icons / Categories /
+                // Developers) subscribe to singleton service change events
+                // (IconHashesChanged, PackagesChanged) in their constructors
+                // and never unsubscribe. Registering them as transient would
+                // mean every navigation creates a fresh instance retained by
+                // the singleton service, leaking page state and causing
+                // duplicated reload work on each service notification.
+                services.AddSingleton<PackagesViewModel>();
                 services.AddTransient<ManifestsViewModel>();
                 services.AddTransient<CatalogsViewModel>();
+                services.AddSingleton<IconsViewModel>();
+                services.AddSingleton<CategoriesViewModel>();
+                services.AddSingleton<DevelopersViewModel>();
                 services.AddTransient<Views.Import.ImportViewModel>();
                 services.AddTransient<BuildViewModel>();
 
@@ -62,6 +74,9 @@ public partial class App : Application
                 services.AddTransient<PackagesPage>();
                 services.AddTransient<ManifestsPage>();
                 services.AddTransient<CatalogsPage>();
+                services.AddTransient<IconsPage>();
+                services.AddTransient<CategoriesPage>();
+                services.AddTransient<DevelopersPage>();
                 // GitPage + ImportPage are singletons so cross-tab handoffs
                 // (Import → Git, Packages drop → Import) operate on the *visible*
                 // page instance instead of a fresh transient that isn't attached
