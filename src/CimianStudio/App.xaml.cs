@@ -50,12 +50,19 @@ public partial class App : Application
                 services.AddSingleton<ICimiimportService, CimiimportService>();
 
                 services.AddSingleton<MainViewModel>();
-                services.AddTransient<PackagesViewModel>();
+                // The browser ViewModels (Packages / Icons / Categories /
+                // Developers) subscribe to singleton service change events
+                // (IconHashesChanged, PackagesChanged) in their constructors
+                // and never unsubscribe. Registering them as transient would
+                // mean every navigation creates a fresh instance retained by
+                // the singleton service, leaking page state and causing
+                // duplicated reload work on each service notification.
+                services.AddSingleton<PackagesViewModel>();
                 services.AddTransient<ManifestsViewModel>();
                 services.AddTransient<CatalogsViewModel>();
-                services.AddTransient<IconsViewModel>();
-                services.AddTransient<CategoriesViewModel>();
-                services.AddTransient<DevelopersViewModel>();
+                services.AddSingleton<IconsViewModel>();
+                services.AddSingleton<CategoriesViewModel>();
+                services.AddSingleton<DevelopersViewModel>();
                 services.AddTransient<Views.Import.ImportViewModel>();
                 services.AddTransient<BuildViewModel>();
 

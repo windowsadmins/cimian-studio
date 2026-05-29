@@ -506,6 +506,7 @@ public sealed partial class RepositoryPage : Page
             NoIconCount: packages.Count(p => string.IsNullOrWhiteSpace(p.IconName)),
             NoCategoryCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Category)),
             NoDeveloperCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Developer)),
+            NoDescriptionCount: packages.Count(p => string.IsNullOrWhiteSpace(p.Description)),
             NoInstallerCount: packages.Count(p => p.Installer is null),
             EmptyManifestCount: emptyManifests,
             UncommittedCount: _gitEntries.Count,
@@ -633,8 +634,15 @@ public sealed partial class RepositoryPage : Page
             {
                 try
                 {
+                    // Guard against locations like `..\..\somefile` or absolute paths
+                    // that escape the repo's pkgs/ root and would pull external file
+                    // sizes into the reclaimable-space estimate.
                     var fullPath = Path.GetFullPath(Path.Combine(pkgsRoot, location));
-                    if (File.Exists(fullPath))
+                    var canonicalRoot = Path.GetFullPath(pkgsRoot)
+                        .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                        + Path.DirectorySeparatorChar;
+                    if (fullPath.StartsWith(canonicalRoot, StringComparison.OrdinalIgnoreCase)
+                        && File.Exists(fullPath))
                     {
                         total += new FileInfo(fullPath).Length;
                         added = true;
@@ -656,17 +664,36 @@ public sealed partial class RepositoryPage : Page
     {
         var dir = repo.IconsPath;
         if (!Directory.Exists(dir)) return 0;
-        try
+        string[] exts = [".png", ".jpg", ".jpeg", ".icns"];
+
+        // EnumerateFiles with AllDirectories aborts on the first inaccessible
+        // subdirectory, which can fail the entire dashboard load for one
+        // protected folder under icons/. Walk manually so a single restricted
+        // child folder is skipped instead.
+        var count = 0;
+        var stack = new Stack<string>();
+        stack.Push(dir);
+        while (stack.Count > 0)
         {
-            string[] exts = [".png", ".jpg", ".jpeg", ".icns"];
-            return Directory
-                .EnumerateFiles(dir, "*", SearchOption.AllDirectories)
-                .Count(f => exts.Any(e => string.Equals(Path.GetExtension(f), e, StringComparison.OrdinalIgnoreCase)));
+            var current = stack.Pop();
+            try
+            {
+                foreach (var file in Directory.EnumerateFiles(current))
+                {
+                    if (exts.Any(e => string.Equals(Path.GetExtension(file), e, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        count++;
+                    }
+                }
+                foreach (var sub in Directory.EnumerateDirectories(current))
+                {
+                    stack.Push(sub);
+                }
+            }
+            catch (UnauthorizedAccessException) { }
+            catch (IOException) { }
         }
-        catch (IOException)
-        {
-            return 0;
-        }
+        return count;
     }
 
     private List<GitCommit> _recentCommits = [];
@@ -760,6 +787,27 @@ public sealed partial class RepositoryPage : Page
         }
     }
 
+    private static string StripVersionPin(string name)
+    {
+        // Walk from the right looking for `-<digit>` — only the rightmost such
+        // boundary terminates a version pin. This keeps `firefox-esr` intact
+        // while still trimming `firefox-esr-128.4.0` to `firefox-esr`.
+        var i = name.Length - 1;
+        while (i > 0)
+        {
+            var dash = name.LastIndexOf('-', i);
+            if (dash <= 0 || dash + 1 >= name.Length) return name;
+            var next = name[dash + 1];
+            if (char.IsDigit(next))
+            {
+                return name[..dash];
+            }
+            i = dash - 1;
+        }
+        return name;
+    }
+
+
     private static void AddAll(HashSet<string> sink, IEnumerable<string>? source)
     {
         if (source is null) return;
@@ -769,8 +817,10 @@ public sealed partial class RepositoryPage : Page
             {
                 // Manifests can pin a specific version with `name-1.2.3`; strip
                 // the version suffix so it matches the pkginfo's `name` field.
-                var dash = s.IndexOf('-', StringComparison.Ordinal);
-                sink.Add(dash > 0 ? s[..dash] : s);
+                // Only strip when the suffix starts with a digit — real package
+                // names like `firefox-esr` or `dotnet-sdk-9` include hyphens
+                // and must not be truncated to the first segment.
+                sink.Add(StripVersionPin(s));
             }
         }
     }
@@ -867,6 +917,7 @@ public sealed partial class RepositoryPage : Page
             ("No icon", stats.NoIconCount.ToString(CultureInfo.InvariantCulture), null),
             ("No category", stats.NoCategoryCount.ToString(CultureInfo.InvariantCulture), null),
             ("No developer", stats.NoDeveloperCount.ToString(CultureInfo.InvariantCulture), null),
+            ("No description", stats.NoDescriptionCount.ToString(CultureInfo.InvariantCulture), null),
             ("No installer", stats.NoInstallerCount.ToString(CultureInfo.InvariantCulture), null),
             ("Empty manifests", stats.EmptyManifestCount.ToString(CultureInfo.InvariantCulture), null),
         ]);
@@ -991,6 +1042,7 @@ public sealed partial class RepositoryPage : Page
         int NoIconCount,
         int NoCategoryCount,
         int NoDeveloperCount,
+        int NoDescriptionCount,
         int NoInstallerCount,
         int EmptyManifestCount,
         int UncommittedCount,

@@ -193,17 +193,28 @@ public sealed partial class MainWindow : Window
         _currentTag = tag;
 
         var item = FindNavItem(tag);
-        if (item is not null && !ReferenceEquals(NavView.SelectedItem, item))
+        _suppressNavSelection = true;
+        try
         {
-            _suppressNavSelection = true;
-            try
+            if (item is not null)
             {
-                NavView.SelectedItem = item;
+                if (!ReferenceEquals(NavView.SelectedItem, item))
+                {
+                    NavView.SelectedItem = item;
+                }
             }
-            finally
+            else if (NavView.SelectedItem is not null)
             {
-                _suppressNavSelection = false;
+                // Dashboard cards can navigate to pages that no longer have a rail
+                // entry (e.g. Icons, Categories, Developers). Clear the selection
+                // so the rail doesn't keep highlighting the previously active item
+                // while the user is on a different page.
+                NavView.SelectedItem = null;
             }
+        }
+        finally
+        {
+            _suppressNavSelection = false;
         }
 
         PushHistory(new NavEntry(tag, null));
