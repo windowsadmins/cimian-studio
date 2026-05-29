@@ -60,6 +60,16 @@ public sealed partial class MainWindow : Window
         SetTitleBar(AppTitleBar);
         Title = Constants.AppName;
 
+        // Unpackaged WinUI 3 windows don't inherit the EXE's <ApplicationIcon>;
+        // wire the same .ico into the AppWindow so the title bar / taskbar /
+        // Alt-Tab thumbnail all show it. Best-effort — a missing or broken
+        // asset must not crash the app at startup.
+        var iconPath = Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon", "AppIcon.ico");
+        if (File.Exists(iconPath))
+        {
+            try { AppWindow.SetIcon(iconPath); } catch { }
+        }
+
         SystemBackdrop = new MicaBackdrop();
 
         _repositoryService.RepositoryChanged += OnRepositoryChanged;
@@ -183,17 +193,28 @@ public sealed partial class MainWindow : Window
         _currentTag = tag;
 
         var item = FindNavItem(tag);
-        if (item is not null && !ReferenceEquals(NavView.SelectedItem, item))
+        _suppressNavSelection = true;
+        try
         {
-            _suppressNavSelection = true;
-            try
+            if (item is not null)
             {
-                NavView.SelectedItem = item;
+                if (!ReferenceEquals(NavView.SelectedItem, item))
+                {
+                    NavView.SelectedItem = item;
+                }
             }
-            finally
+            else if (NavView.SelectedItem is not null)
             {
-                _suppressNavSelection = false;
+                // Dashboard cards can navigate to pages that no longer have a rail
+                // entry (e.g. Icons, Categories, Developers). Clear the selection
+                // so the rail doesn't keep highlighting the previously active item
+                // while the user is on a different page.
+                NavView.SelectedItem = null;
             }
+        }
+        finally
+        {
+            _suppressNavSelection = false;
         }
 
         PushHistory(new NavEntry(tag, null));
@@ -356,27 +377,41 @@ public sealed partial class MainWindow : Window
         // GitIndicator exactly. The Lucide font's git-branch glyph rendered
         // visibly thinner than the title bar's 2px-stroked Path at rail size;
         // by swapping the IconBox's Child for the same Path the title bar uses,
-        // both visuals stay in lockstep. NavigationViewItemPresenter's IconBox
-        // is a Viewbox once the template applies.
-        var iconBox = FindDescendant<Viewbox>(NavGit, "IconBox");
-        if (iconBox is not null)
+        // both visuals stay in lockstep.
+        SwapNavItemIcon(NavGit,
+            "M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z " +
+            "M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18");
+
+    }
+
+    /// <summary>
+    /// Replaces the IconBox child of <paramref name="item"/> with a stroked
+    /// Lucide-style <see cref="Microsoft.UI.Xaml.Shapes.Path"/> bound to the
+    /// item's Foreground so it picks up nav-state theming for free.
+    /// NavigationViewItemPresenter's IconBox is a Viewbox once the template
+    /// applies; bail silently if we get called before then.
+    /// </summary>
+    private static void SwapNavItemIcon(NavigationViewItem item, string pathData)
+    {
+        var iconBox = FindDescendant<Viewbox>(item, "IconBox");
+        if (iconBox is null)
         {
-            const string pathXaml =
-                "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
-                "Width=\"24\" Height=\"24\" " +
-                "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
-                "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
-                "Fill=\"Transparent\" " +
-                "Data=\"M6,3 V15 M15,6 A3,3 0 1 0 21,6 A3,3 0 1 0 15,6 Z " +
-                "M3,18 A3,3 0 1 0 9,18 A3,3 0 1 0 3,18 Z M18,9 A9,9 0 0 1 9,18\" />";
-            var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
-            path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
-            {
-                Source = NavGit,
-                Path = new PropertyPath("Foreground"),
-            });
-            iconBox.Child = path;
+            return;
         }
+
+        var pathXaml =
+            "<Path xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" " +
+            "Width=\"24\" Height=\"24\" " +
+            "StrokeThickness=\"2\" StrokeLineJoin=\"Round\" " +
+            "StrokeStartLineCap=\"Round\" StrokeEndLineCap=\"Round\" " +
+            "Fill=\"Transparent\" Data=\"" + pathData + "\" />";
+        var path = (Microsoft.UI.Xaml.Shapes.Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(pathXaml);
+        path.SetBinding(Microsoft.UI.Xaml.Shapes.Path.StrokeProperty, new Microsoft.UI.Xaml.Data.Binding
+        {
+            Source = item,
+            Path = new PropertyPath("Foreground"),
+        });
+        iconBox.Child = path;
     }
 
     private static T? FindDescendant<T>(DependencyObject root, string name) where T : FrameworkElement
@@ -390,6 +425,33 @@ public sealed partial class MainWindow : Window
             if (found is not null) return found;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Switches the rail from <c>LeftCompact</c> (icons only) to <c>Left</c>
+    /// (full inline pane) when the user clicks the toggle to expand. <c>Left</c>
+    /// mode pushes the content frame right instead of overlaying it, which is
+    /// what the user actually expects when they expand a sidebar. The pair of
+    /// PaneOpening / PaneClosing handlers below toggles between the two modes.
+    /// </summary>
+    private void OnNavPaneOpening(NavigationView sender, object args)
+    {
+        // Touch an instance member so the analyzer doesn't flag this as static —
+        // XAML event handlers must be instance methods to wire from markup.
+        _ = this.NavView;
+        if (sender.PaneDisplayMode != NavigationViewPaneDisplayMode.Left)
+        {
+            sender.PaneDisplayMode = NavigationViewPaneDisplayMode.Left;
+        }
+    }
+
+    private void OnNavPaneClosing(NavigationView sender, NavigationViewPaneClosingEventArgs args)
+    {
+        _ = this.NavView;
+        if (sender.PaneDisplayMode != NavigationViewPaneDisplayMode.LeftCompact)
+        {
+            sender.PaneDisplayMode = NavigationViewPaneDisplayMode.LeftCompact;
+        }
     }
 
     private void NavView_SelectionChanged(NavigationView sender, NavigationViewSelectionChangedEventArgs args)
@@ -520,6 +582,9 @@ public sealed partial class MainWindow : Window
             "packages" => App.Resolve<PackagesPage>(),
             "manifests" => App.Resolve<ManifestsPage>(),
             "catalogs" => App.Resolve<CatalogsPage>(),
+            "icons" => App.Resolve<IconsPage>(),
+            "categories" => App.Resolve<CategoriesPage>(),
+            "developers" => App.Resolve<DevelopersPage>(),
             "import" => App.Resolve<Views.Import.ImportPage>(),
             "git" => App.Resolve<GitPage>(),
             "build" => App.Resolve<Views.Build.BuildPage>(),
