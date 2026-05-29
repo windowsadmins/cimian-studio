@@ -77,6 +77,9 @@ public sealed partial class IconsPage : Page
                 if (!string.IsNullOrEmpty(ViewModel.StatusMessage))
                 {
                     StatusBar.Title = ViewModel.StatusMessage;
+                    // Reset severity — without this, an informational update
+                    // after a previous error still renders with error styling.
+                    StatusBar.Severity = InfoBarSeverity.Informational;
                     StatusBar.IsOpen = true;
                 }
                 break;
