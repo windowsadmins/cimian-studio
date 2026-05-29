@@ -192,7 +192,27 @@
                             </StackPanel>
                             <StackPanel Grid.Column="1">
                                 <TextBlock Text="Location" Style="{StaticResource CaptionTextBlockStyle}" />
-                                <TextBox x:Name="InstallerLocationField" TextChanged="OnFieldChanged" />
+                                <Grid ColumnSpacing="6">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <Button x:Name="InspectInstallerButton"
+                                            Grid.Column="0"
+                                            Click="OnInspectInstaller"
+                                            ToolTipService.ToolTip="Open in Package Inspector"
+                                            IsEnabled="False"
+                                            VerticalAlignment="Stretch"
+                                            MinWidth="36"
+                                            Padding="6,0">
+                                        <Image Source="ms-appx:///Assets/Icons/pkginspector.png"
+                                               Width="20" Height="20"
+                                               Stretch="Uniform" />
+                                    </Button>
+                                    <TextBox x:Name="InstallerLocationField"
+                                             Grid.Column="1"
+                                             TextChanged="OnFieldChanged" />
+                                </Grid>
                             </StackPanel>
                             <StackPanel Grid.Column="2">
                                 <TextBlock Text="Size (bytes)" Style="{StaticResource CaptionTextBlockStyle}" />
