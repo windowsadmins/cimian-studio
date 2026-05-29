@@ -401,10 +401,10 @@ public sealed class GitService : IGitService
         }
     }
 
-    public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, int skip = 0, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(info);
-        return Task.Run<IReadOnlyList<GitCommit>>(() => GetHistoryCore(info, limit), cancellationToken);
+        return Task.Run<IReadOnlyList<GitCommit>>(() => GetHistoryCore(info, limit, skip), cancellationToken);
     }
 
     public Task<string> GetCommitDiffAsync(GitRepositoryInfo info, string sha, CancellationToken cancellationToken = default)
@@ -890,13 +890,21 @@ public sealed class GitService : IGitService
             // uses POSIX separators even on Windows.
             var slashPath = relativePath.Replace('\\', '/');
 
+            // Hunk header line count must include any UI-hint context line we
+            // append for truncation, otherwise the patch body is one line
+            // longer than the declared count and Stage Chunk silently re-uses
+            // the wrong region of the file (UnifiedDiffParser tolerantly
+            // accepts the trailing line as context, but `git apply` rejects).
+            var truncated = info.Length > maxBytes;
+            var hunkLineCount = emitLines.Length + (truncated ? 1 : 0);
+
             var sb = new StringBuilder(text.Length + 256);
             sb.Append("diff --git a/").Append(slashPath).Append(" b/").Append(slashPath).Append('\n');
             sb.Append("new file mode 100644\n");
             sb.Append("index 0000000..0000000\n");
             sb.Append("--- /dev/null\n");
             sb.Append("+++ b/").Append(slashPath).Append('\n');
-            sb.Append("@@ -0,0 +1,").Append(emitLines.Length).Append(" @@\n");
+            sb.Append("@@ -0,0 +1,").Append(hunkLineCount).Append(" @@\n");
             foreach (var line in emitLines)
             {
                 sb.Append('+').Append(line).Append('\n');
@@ -905,7 +913,7 @@ public sealed class GitService : IGitService
             {
                 sb.Append("\\ No newline at end of file\n");
             }
-            if (info.Length > maxBytes)
+            if (truncated)
             {
                 // Mark the truncation as a context line so the renderer doesn't
                 // mistake it for an added line — it's a UI hint, not real content.
@@ -1036,16 +1044,20 @@ public sealed class GitService : IGitService
     private const char FieldSep = '\x1f';
     private const char RecordSep = '\x1e';
 
-    private static List<GitCommit> GetHistoryCore(GitRepositoryInfo info, int limit)
+    private static List<GitCommit> GetHistoryCore(GitRepositoryInfo info, int limit, int skip = 0)
     {
         if (limit <= 0) return [];
 
         // %H=full sha, %an=author name, %ae=author email, %aI=ISO8601 author date,
         // %P=parent shas (space-separated), %D=ref names, %s=subject
         var format = $"%H{FieldSep}%an{FieldSep}%ae{FieldSep}%aI{FieldSep}%P{FieldSep}%D{FieldSep}%s{RecordSep}";
-        var (code, output) = RunGit(info.GitRoot,
-            ["log", "--all", "--topo-order", "--decorate=full",
-             $"--max-count={limit}", $"--pretty=format:{format}"]);
+        var args = new List<string>
+        {
+            "log", "--all", "--topo-order", "--decorate=full",
+            $"--max-count={limit}", $"--pretty=format:{format}",
+        };
+        if (skip > 0) args.Add($"--skip={skip}");
+        var (code, output) = RunGit(info.GitRoot, args);
 
         if (code != 0 || string.IsNullOrEmpty(output)) return [];
 

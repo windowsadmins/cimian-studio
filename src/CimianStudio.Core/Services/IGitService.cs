@@ -120,9 +120,11 @@ public interface IGitService
 
     /// <summary>
     /// Returns the commit history for all branches (topo-order), enriched with
-    /// parent SHAs and ref decorations for graph and badge rendering.
+    /// parent SHAs and ref decorations for graph and badge rendering. The
+    /// optional <paramref name="skip"/> lets callers page through history
+    /// without re-walking the entire log each time they want the next slice.
     /// </summary>
-    Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, CancellationToken cancellationToken = default);
+    Task<IReadOnlyList<GitCommit>> GetHistoryAsync(GitRepositoryInfo info, int limit = 200, int skip = 0, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the unified-diff text for a commit (diff against its first parent).
