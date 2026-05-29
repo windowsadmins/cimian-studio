@@ -57,7 +57,6 @@ public sealed partial class PackageEditor : UserControl
         _packageInspector = packageInspector;
         InitializeComponent();
         _sessionState.Changed += OnSessionStateChanged;
-        InstallerLocationField.TextChanged += (_, _) => UpdateInspectButtonState();
         Unloaded += (_, _) => _sessionState.Changed -= OnSessionStateChanged;
     }
 
@@ -595,6 +594,13 @@ public sealed partial class PackageEditor : UserControl
 
     private void OnFieldChanged(object sender, RoutedEventArgs e)
     {
+        // InstallerLocationField is wired to this handler via XAML; refresh the
+        // Inspect button alongside the dirty flag rather than carrying a second
+        // TextChanged subscription that fired on every keystroke independently.
+        if (ReferenceEquals(sender, InstallerLocationField))
+        {
+            UpdateInspectButtonState();
+        }
         if (_suppressDirty)
         {
             return;
