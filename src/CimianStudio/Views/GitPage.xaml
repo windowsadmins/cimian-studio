@@ -37,6 +37,19 @@
                 <ComboBox x:Name="BranchPicker"
                           MinWidth="220"
                           SelectionChanged="OnBranchSelectionChanged" />
+                <DropDownButton x:Name="BranchesButton"
+                                ToolTipService.ToolTip="Manage branches (rename, delete, merge into current)">
+                    <DropDownButton.Content>
+                        <Viewbox Width="14" Height="14">
+                            <Path Width="24" Height="24" Style="{StaticResource LucidePath}"
+                                  Stroke="{ThemeResource TextFillColorPrimaryBrush}"
+                                  Data="M3,6 H21 M3,12 H21 M3,18 H21" />
+                        </Viewbox>
+                    </DropDownButton.Content>
+                    <DropDownButton.Flyout>
+                        <Flyout x:Name="BranchesFlyout" Placement="Bottom" />
+                    </DropDownButton.Flyout>
+                </DropDownButton>
                 <!-- Ahead/behind status rendered to match the adjacent Fetch/Pull buttons:
                      same corner radius, same control surface, same height. Becomes
                      visible only when there's something to report. -->
@@ -62,6 +75,22 @@
                         <TextBlock Text="git pull --rebase --autostash" />
                     </ToolTipService.ToolTip>
                 </Button>
+                <DropDownButton x:Name="StashButton"
+                                ToolTipService.ToolTip="Stash working tree / browse stashes">
+                    <DropDownButton.Content>
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <Viewbox Width="14" Height="14">
+                                <Path Width="24" Height="24" Style="{StaticResource LucidePath}"
+                                      Stroke="{ThemeResource TextFillColorPrimaryBrush}"
+                                      Data="M22,12 H2 M5.45,5.11 L2,12 V18 A2,2 0 0 0 4,20 H20 A2,2 0 0 0 22,18 V12 L18.55,5.11 A2,2 0 0 0 16.76,4 H7.24 A2,2 0 0 0 5.45,5.11 Z" />
+                            </Viewbox>
+                            <TextBlock Text="Stash" />
+                        </StackPanel>
+                    </DropDownButton.Content>
+                    <DropDownButton.Flyout>
+                        <Flyout x:Name="StashFlyout" Placement="Bottom" Opening="OnStashButtonOpening" />
+                    </DropDownButton.Flyout>
+                </DropDownButton>
                 <Button x:Name="HelpButton" Click="OnHelpClicked" Width="36">
                     <Button.Content>
                         <Viewbox Width="14" Height="14">
@@ -105,16 +134,17 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <StackPanel Grid.Row="0" Spacing="6">
-                    <TextBlock Text="Subject (≤72 chars recommended)"
-                               Style="{StaticResource CaptionTextBlockStyle}" />
+                <!-- Subject + Body. The Subject caption is omitted so the
+                     TextBox top aligns with the top of the diff card on the
+                     right — the placeholder ("Promote Office 2025 to
+                     Production") signals the field's purpose. Body keeps its
+                     caption since it has no placeholder of its own. -->
+                <StackPanel Grid.Row="0" Spacing="8">
                     <TextBox x:Name="SubjectBox"
-                             PlaceholderText="Promote Office 2025 to Production"
+                             PlaceholderText="Subject (≤72 chars recommended)"
                              TextChanged="OnSubjectChanged" />
-                    <TextBlock Text="Body (optional)"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               Margin="0,4,0,0" />
                     <TextBox x:Name="BodyBox"
+                             PlaceholderText="Body (optional)"
                              AcceptsReturn="True"
                              TextWrapping="Wrap"
                              FontFamily="Cascadia Mono, Consolas"
@@ -214,7 +244,7 @@
                         Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16">
                     <Grid>
                         <ListView x:Name="ChangesList"
-                                  SelectionMode="Single"
+                                  SelectionMode="Extended"
                                   IsItemClickEnabled="True"
                                   ItemClick="OnChangeItemClicked"
                                   SelectionChanged="OnChangeSelectionChanged"
@@ -242,48 +272,20 @@
                                    ResizeBehavior="PreviousAndNext"
                                    ResizeDirection="Columns" />
 
-            <Grid Grid.Column="2" RowSpacing="6">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <Grid Grid.Row="0" ColumnSpacing="8">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0"
-                               x:Name="DiffHeader"
-                               Text="Diff"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               TextTrimming="CharacterEllipsis"
-                               VerticalAlignment="Center" />
-                    <HyperlinkButton Grid.Column="1"
-                                     x:Name="OpenInEditorButton"
-                                     Content="Open in editor"
-                                     Visibility="Collapsed"
-                                     VerticalAlignment="Center"
-                                     Click="OnOpenInEditorClicked">
-                        <ToolTipService.ToolTip>
-                            <TextBlock Text="Open in editor (o)" />
-                        </ToolTipService.ToolTip>
-                    </HyperlinkButton>
-                </Grid>
-
-                <Border Grid.Row="1"
+            <Grid Grid.Column="2">
+                <!-- Single-row layout so the top of the diff card aligns with
+                     the top of the subject text box on the left. The Edit
+                     button + file path now live inside the file card's own
+                     header strip instead of in a separate "Diff" caption row. -->
+                <Border
                         Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16">
                     <Grid>
                         <ScrollViewer x:Name="DiffScroller"
                                       HorizontalScrollMode="Enabled"
                                       HorizontalScrollBarVisibility="Auto"
                                       VerticalScrollBarVisibility="Auto"
-                                      Padding="10">
-                            <TextBlock x:Name="DiffText"
-                                       FontFamily="Cascadia Mono, Consolas"
-                                       FontSize="12"
-                                       TextWrapping="NoWrap"
-                                       IsTextSelectionEnabled="True" />
+                                      Padding="0">
+                            <StackPanel x:Name="DiffContent" Spacing="10" Padding="10" />
                         </ScrollViewer>
                         <TextBlock x:Name="DiffPlaceholder"
                                    Text="Select a changed file to see its diff."
@@ -307,11 +309,29 @@
 
                     <Border Grid.Column="0"
                             Style="{StaticResource CardStyle}" Shadow="{StaticResource CardShadow}" Translation="0,0,16">
-                        <Grid>
-                            <ListView x:Name="HistoryList"
+                        <Grid RowSpacing="6">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <TextBox Grid.Row="0"
+                                     x:Name="HistorySearchBox"
+                                     PlaceholderText="Filter by SHA, subject, author, or ref"
+                                     TextChanged="OnHistorySearchChanged"
+                                     Margin="8,8,8,0" />
+                            <ListView Grid.Row="1"
+                                      x:Name="HistoryList"
                                       SelectionMode="Single"
                                       SelectionChanged="OnHistorySelectionChanged"
                                       Padding="0,2,0,2">
+                                <ListView.Footer>
+                                    <Button x:Name="LoadMoreCommitsButton"
+                                            Content="Load 200 more commits"
+                                            Click="OnLoadMoreCommitsClicked"
+                                            Margin="8,8,8,12"
+                                            HorizontalAlignment="Stretch"
+                                            Visibility="Collapsed" />
+                                </ListView.Footer>
                                 <ListView.ItemContainerStyle>
                                     <Style TargetType="ListViewItem">
                                         <Setter Property="Padding" Value="0" />
@@ -443,12 +463,8 @@
                                           HorizontalScrollMode="Enabled"
                                           HorizontalScrollBarVisibility="Auto"
                                           VerticalScrollBarVisibility="Auto"
-                                          Padding="10">
-                                <TextBlock x:Name="HistoryDiffText"
-                                           FontFamily="Cascadia Mono, Consolas"
-                                           FontSize="12"
-                                           TextWrapping="NoWrap"
-                                           IsTextSelectionEnabled="True" />
+                                          Padding="0">
+                                <StackPanel x:Name="HistoryDiffContent" Spacing="10" Padding="10" />
                             </ScrollViewer>
                             <TextBlock x:Name="HistoryDiffPlaceholder"
                                        Text="Select a commit to see its diff."
