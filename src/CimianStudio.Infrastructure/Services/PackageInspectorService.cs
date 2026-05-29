@@ -97,8 +97,8 @@ public sealed class PackageInspectorService : IPackageInspectorService
         }
 
         // Drain stdio so pkginspector's optional console writes don't deadlock.
-        _ = proc.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        _ = proc.StandardError.ReadToEndAsync(CancellationToken.None);
+        var stdoutTask = proc.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        var stderrTask = proc.StandardError.ReadToEndAsync(CancellationToken.None);
 
         // ASR can also terminate the child immediately after CreateProcess succeeds
         // (image-load policy block). Sample after a short delay — if it died with
@@ -111,6 +111,7 @@ public sealed class PackageInspectorService : IPackageInspectorService
                 // 0xC0000022 STATUS_ACCESS_DENIED, 0xC0000142 STATUS_DLL_INIT_FAILED,
                 // 0xC0000135 STATUS_DLL_NOT_FOUND — all consistent with ASR/EDR blocks.
                 var code = (uint)proc.ExitCode;
+                proc.Dispose();
                 if (code is 0xC0000022 or 0xC0000142 or 0xC0000135)
                 {
                     return new(false, PackageInspectorLaunchFailureKind.DefenderAsrBlock,
@@ -126,7 +127,32 @@ public sealed class PackageInspectorService : IPackageInspectorService
         }
         catch (OperationCanceledException) { }
 
+        // Success: the inspector keeps running independently of this method.
+        // Drop our Process handle once its stdio pipes close (typically when
+        // the child exits), so we don't accumulate one leaked Process object
+        // and OS handle per Inspect click for the lifetime of the app.
+        var procToDispose = proc;
+        _ = Task.WhenAll(stdoutTask, stderrTask).ContinueWith(
+            _ => procToDispose.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+
         return new(true, PackageInspectorLaunchFailureKind.None, null);
+    }
+
+    private static bool IsPrimaryArchAsset(string name, string arch)
+    {
+        var index = name.IndexOf(arch, StringComparison.OrdinalIgnoreCase);
+        while (index >= 0)
+        {
+            var beforeOk = index == 0 || name[index - 1] is '-' or '_' or '.';
+            var afterIndex = index + arch.Length;
+            var afterOk = afterIndex == name.Length || name[afterIndex] is '-' or '_' or '.';
+            if (beforeOk && afterOk) return true;
+            index = name.IndexOf(arch, index + 1, StringComparison.OrdinalIgnoreCase);
+        }
+        return false;
     }
 
     private static bool HasEmbeddedSignature(string exePath)
@@ -160,7 +186,18 @@ public sealed class PackageInspectorService : IPackageInspectorService
             }
 
             var arch = RuntimeInformation.ProcessArchitecture == Architecture.Arm64 ? "arm64" : "x64";
-            var asset = release.Assets.FirstOrDefault(a => a.Name?.Contains(arch, StringComparison.OrdinalIgnoreCase) == true && a.Name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase));
+            // Require the arch token to sit on a hyphen boundary so we don't
+            // pick up `pkginspector-x64-symbols.zip` or similar auxiliary
+            // artefacts that happen to contain "x64" / "arm64" in their name.
+            // Prefer the shortest matching name as a final tiebreaker — a
+            // primary `pkginspector-x64.zip` will sort ahead of any decorated
+            // variant the project might add later.
+            var asset = release.Assets
+                .Where(a => !string.IsNullOrEmpty(a.Name)
+                    && a.Name!.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    && IsPrimaryArchAsset(a.Name, arch))
+                .OrderBy(a => a.Name!.Length)
+                .FirstOrDefault();
             if (asset is null || string.IsNullOrEmpty(asset.BrowserDownloadUrl))
             {
                 return new(false, null, $"Latest release has no {arch} zip asset.");
