@@ -1229,7 +1229,8 @@ public sealed partial class GitPage : Page
     /// <summary>
     /// Re-applies the search box's text against the cached <see cref="_allHistoryRows"/>
     /// and rebinds the visible list. Filter is case-insensitive across SHA prefix,
-    /// subject, author name/email, and any decorating ref names.
+    /// subject, author name, and any decorating ref names. Author email isn't
+    /// indexed because <see cref="HistoryRow"/> doesn't carry it.
     /// </summary>
     private void ApplyHistoryFilter()
     {
@@ -1276,10 +1277,40 @@ public sealed partial class GitPage : Page
     private async void OnLoadMoreCommitsClicked(object sender, RoutedEventArgs e)
     {
         if (_info is null) return;
-        _historyLimit += HistoryPageSize;
-        // Reset so LoadHistoryAsync re-fetches with the larger limit.
-        _historyLoaded = false;
-        await LoadHistoryAsync().ConfigureAwait(true);
+
+        // Fetch only the next page via --skip and append, rather than
+        // re-walking the entire log with an ever-growing --max-count. For
+        // large repos this keeps each click O(page) instead of O(loaded).
+        HistoryLoading.IsActive = true;
+        try
+        {
+            var next = await _gitService
+                .GetHistoryAsync(_info, HistoryPageSize, skip: _allHistoryRows.Count)
+                .ConfigureAwait(true);
+            if (next.Count == 0)
+            {
+                LoadMoreCommitsButton.Visibility = Visibility.Collapsed;
+                return;
+            }
+
+            // Lane layout has to be recomputed across the union so parent
+            // arrows in the new rows connect to their already-rendered
+            // children. Cheaper than refetching, still bounded by the total
+            // loaded set.
+            var combined = _allHistoryRows.Select(r => r.Commit).Concat(next).ToList();
+            var laneRows = LaneLayout.Compute(combined);
+            _allHistoryRows = combined.Zip(laneRows, (c, lr) => new HistoryRow(c, lr)).ToList();
+            _historyLimit = _allHistoryRows.Count;
+
+            ApplyHistoryFilter();
+            LoadMoreCommitsButton.Visibility = next.Count >= HistoryPageSize
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        finally
+        {
+            HistoryLoading.IsActive = false;
+        }
     }
 
     // ── Hooks pivot ───────────────────────────────────────────────────────────
@@ -1891,6 +1922,7 @@ public sealed partial class GitPage : Page
 
     private sealed class HistoryRow(GitCommit commit, LaneGraphRow laneRow)
     {
+        public GitCommit Commit => commit;
         public string Sha => commit.Sha;
         public string FullSha => commit.FullSha.Length > 0 ? commit.FullSha : commit.Sha;
         public string Subject => commit.Subject;
