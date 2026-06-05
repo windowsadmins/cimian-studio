@@ -1,5 +1,5 @@
 product:
-  name: Cimian Studio
+  name: CimianStudio
   version: ${TIMESTAMP}
   developer: ExampleOrgU
   identifier: ca.emilycarru.winadmins.${ARCH}.CimianStudio
