@@ -35,13 +35,18 @@ jobs:
           path: ~\.nuget\packages
           key: nuget-${{ runner.os }}-${{ hashFiles('**/*.csproj', '**/Directory.Build.props', '**/Directory.Packages.props') }}
 
-      - name: Derive version from tag
+      - name: Derive datestamp version
         id: version
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $version = $tag -replace '^v',''
+          # Tag stays semantic (vN.N.N) for release-history readability, but
+          # the shipped binaries/MSIs carry a fresh YYYY.MM.DD.HHMM datestamp
+          # so every build is uniquely identifiable downstream. Matches the
+          # CimianTools convention. TZ is set to America/Vancouver in env so
+          # Get-Date returns Pacific local time.
+          $version = Get-Date -Format "yyyy.MM.dd.HHmm"
           "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Datestamp version: $version"
 
       - name: Publish WinUI 3 app per arch
         shell: pwsh
