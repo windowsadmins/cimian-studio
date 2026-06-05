@@ -1,5 +1,5 @@
 product:
-  name: Cimian Studio
+  name: CimianStudio
   version: ${TIMESTAMP}
   developer: EmilyCarrU
   identifier: ca.emilycarru.winadmins.${ARCH}.CimianStudio
