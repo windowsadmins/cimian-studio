@@ -6,7 +6,7 @@
 .DESCRIPTION
     Mirrors the structure of `packages/CimianTools/build.ps1` but scoped to this single
     WinUI 3 app. Looks up the enterprise code-signing certificate by subject (defaults to
-    "ExampleOrgU", overridable via $env:CIMIAN_CERT_SUBJECT), runs `dotnet build` against
+    "YourOrg", overridable via $env:CIMIAN_CERT_SUBJECT), runs `dotnet build` against
     the WinUI csproj, signs the produced CimianStudio.exe with signtool + a trusted RFC3161
     timestamp, and optionally launches the freshly-signed binary.
 
@@ -128,7 +128,7 @@ $script:ScriptBoundParameters = $PSBoundParameters
 
 # --- Configuration ---------------------------------------------------------
 
-$Global:EnterpriseCertSubject = $env:CIMIAN_CERT_SUBJECT ?? 'ExampleOrgU'
+$Global:EnterpriseCertSubject = $env:CIMIAN_CERT_SUBJECT ?? 'unset-signing-cert-subject'
 
 $repoRoot = $PSScriptRoot
 $csproj = Join-Path $repoRoot 'src\CimianStudio\CimianStudio.csproj'
@@ -449,7 +449,7 @@ function Assert-CimipkgTrusted {
     if ($sig.Status -ne 'Valid') {
         throw "cimipkg.exe at '$Path' is not Authenticode-Valid (Status=$($sig.Status)). Refusing to run."
     }
-    $expectedSubject = if ($env:CIMIPKG_EXPECTED_SUBJECT) { $env:CIMIPKG_EXPECTED_SUBJECT } else { 'ExampleOrgU' }
+    $expectedSubject = if ($env:CIMIPKG_EXPECTED_SUBJECT) { $env:CIMIPKG_EXPECTED_SUBJECT } else { 'unset-signing-cert-subject' }
     $subject = $sig.SignerCertificate.Subject
     if ($subject -notlike "*$expectedSubject*") {
         throw "cimipkg.exe at '$Path' is signed by '$subject', which does not match expected '*$expectedSubject*'. Refusing to run. Set `$env:CIMIPKG_EXPECTED_SUBJECT to override."
