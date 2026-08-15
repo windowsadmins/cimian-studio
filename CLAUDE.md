@@ -18,7 +18,7 @@ Project-wide rules in the parent repo's `CLAUDE.md` (signing, sudo over `RunAs`,
 .\build.ps1 -Release -Architecture x64 -Install   # build signed MSI and msiexec it on this host
 .\build.ps1 -Release -Upload v0.3.0      # push signed artifacts to GitHub release, clobbering unsigned CI uploads
 .\build.ps1 -NoSign                      # only use when targeting a different host
-$env:CIMIAN_CERT_SUBJECT = 'YourOrg'; .\build.ps1   # override cert subject (default: EmilyCarrU)
+$env:CIMIAN_CERT_SUBJECT = 'YourOrg'; .\build.ps1   # override cert subject (no default; must be set)
 ```
 
 Quick `dotnet` iteration without packaging:
@@ -35,7 +35,7 @@ dotnet test --filter "FullyQualifiedName~Canary"                           # ide
 
 ### cimipkg dependency for `-Release`
 
-`Invoke-Release` shells out to `cimipkg.exe` to produce the MSI. `Get-CimipkgPath` searches in this order: sibling `../CimianTools/release/{x64,arm64}/cimipkg.exe`, then `PATH`, then a pinned GitHub download. **It refuses to run any `cimipkg.exe` whose Authenticode subject doesn't contain `EmilyCarrU`** (override via `$env:CIMIPKG_EXPECTED_SUBJECT`). For the GitHub download path you must set `$env:CIMIPKG_VERSION` to a release tag — there's no "latest" fallback by design (supply-chain pin).
+`Invoke-Release` shells out to `cimipkg.exe` to produce the MSI. `Get-CimipkgPath` searches in this order: sibling `../CimianTools/release/{x64,arm64}/cimipkg.exe`, then `PATH`, then a pinned GitHub download. **It refuses to run any `cimipkg.exe` whose Authenticode subject doesn't contain `YourOrg`** (override via `$env:CIMIPKG_EXPECTED_SUBJECT`). For the GitHub download path you must set `$env:CIMIPKG_VERSION` to a release tag — there's no "latest" fallback by design (supply-chain pin).
 
 ## Architecture
 
@@ -72,6 +72,6 @@ The `Views/Import/ImportPage.xaml.cs` wizard is *purely UI*: drag-drop, queue, f
 
 `build.ps1` mirrors `CimianTools/build.ps1`:
 
-- Looks up cert by subject (default `EmilyCarrU`, override `$env:CIMIAN_CERT_SUBJECT`), prefers `CurrentUser\My`, falls back to `LocalMachine\My`.
+- Looks up cert by subject (default `YourOrg`, override `$env:CIMIAN_CERT_SUBJECT`), prefers `CurrentUser\My`, falls back to `LocalMachine\My`.
 - Tries in-process `signtool` against three RFC3161 TSAs in order (DigiCert, Sectigo, Entrust). If ASR denies modification of the fresh binary, falls back to `sudo signtool` — **one** elevated invocation that signs every file in one shot, not one UAC prompt per file. Don't refactor this into per-file `Invoke-SignArtifact` calls during release builds.
 - The full release pipeline signs CimianStudio-shipped binaries only and **leaves Microsoft.*/Windows App SDK runtime DLLs alone** — re-signing them invalidates Microsoft's signatures.
