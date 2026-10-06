@@ -90,3 +90,6 @@ Screenshot*.png
 
 # Claude Code working dir (scheduled tasks, etc) — not committed
 .claude/
+
+# Git worktrees
+/.worktrees/

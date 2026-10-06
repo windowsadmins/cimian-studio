@@ -30,6 +30,9 @@
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.0-preview.2.25163.8" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.0-preview.2.25163.8" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0-preview.2.25163.8" />
+    <!-- EF Core Sqlite pulls SQLitePCLRaw 2.1.10, which bundles a SQLite with
+         GHSA-2m69-gcr7-jv3q (fixed after 2.1.11). Pin the bundle until EF Core moves on. -->
+    <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
 
     <!-- Dependency Injection -->
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.0" />
